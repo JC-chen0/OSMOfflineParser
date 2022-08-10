@@ -1,0 +1,5 @@
+# ignore all input and output data
+data/*
+
+# ignore idea
+.idea/
