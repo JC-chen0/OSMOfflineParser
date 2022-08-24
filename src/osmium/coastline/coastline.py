@@ -61,13 +61,10 @@ for id, coastline in coastline_dict.items():
         skip_id = 0
         for sub_id, sub_coastline in coastline_merge_dict.items():
             compare_geometry = sub_coastline["geometry"]
-            print(is_reverse_needed(geometry, compare_geometry))
             if id == sub_id:
                 continue
             if is_reverse_needed(geometry, compare_geometry):
-                print(compare_geometry.wkt)
                 reverse_linestring_coords(compare_geometry)
-                print(compare_geometry.wkt)
             if is_continuous(geometry, compare_geometry):
                 merge_linestring = shapely.ops.linemerge([compare_geometry, geometry])
                 geometry = merge_linestring
