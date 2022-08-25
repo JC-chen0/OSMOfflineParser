@@ -42,7 +42,7 @@ def reverse_linestring_coords(geometry) -> LineString:
 def is_continuous(line1, line2):
     head, tail = line1.coords[0], line1.coords[-1]
     compare_head, compare_tail = line2.coords[0], line2.coords[-1]
-    return head != compare_head and head != compare_tail and tail != compare_head and tail != compare_tail
+    return head == compare_tail or tail == compare_head
 
 
 def is_reverse_needed(line1, line2):
@@ -53,53 +53,61 @@ def is_reverse_needed(line1, line2):
 
 # %% for loop method: Not completed iteration.
 
+# start_time = time.time()
+# processed_list = []
+# for id, coastline in coastline_dict.items():
+#     if id in processed_list:
+#         continue
+#     geometry = coastline["geometry"]
+#     del_list = []
+#     for sub_id, sub_coastline in coastline_merge_dict.items():
+#         compare_geometry = sub_coastline["geometry"]
+#
+#         if id == sub_id:
+#             continue
+#
+#         if is_reverse_needed(geometry, compare_geometry):
+#             compare_geometry = reverse_linestring_coords(compare_geometry.wkt)
+#
+#         if is_continuous(geometry, compare_geometry):
+#             merge_linestring = shapely.ops.linemerge([compare_geometry, geometry])
+#             geometry = merge_linestring
+#             processed_list.append(sub_id)
+#             del_list.append(sub_id)
+#
+#     coastline_merge_dict[id]["geometry"] = geometry
+#     [coastline_merge_dict.pop(del_id) for del_id in del_list]
+#
+# print(f"processed time {time.time() - start_time} seconds")
+# %%
 start_time = time.time()
 processed_list = []
 for id, coastline in coastline_dict.items():
     if id in processed_list:
         continue
     geometry = coastline["geometry"]
-    del_list = []
-    for sub_id, sub_coastline in coastline_merge_dict.items():
-        compare_geometry = sub_coastline["geometry"]
-
-        if id == sub_id:
-            continue
-        if is_continuous(geometry, compare_geometry):
-            continue
-        elif is_reverse_needed(geometry, compare_geometry):
-            compare_geometry = reverse_linestring_coords(compare_geometry.wkt)
-
-        merge_linestring = shapely.ops.linemerge([compare_geometry, geometry])
-        geometry = merge_linestring
-        processed_list.append(sub_id)
-        del_list.append(sub_id)
-
-    coastline_merge_dict[id]["geometry"] = geometry
-    [coastline_merge_dict.pop(del_id) for del_id in del_list]
-
-print(f"processed time {time.time() - start_time} seconds")
-# %%
-start_time = time.time()
-for id, coastline in coastline_dict.items():
-    if id in processed_list:
-        continue
-
     merging = True
     del_list = []
     while merging:
         for sub_id, sub_coastline in coastline_merge_dict.items():
+            compare_geometry = sub_coastline["geometry"]
 
             if id == sub_id:
                 continue
-            if is_continuous(geometry, compare_geometry):
-                continue
-            elif is_reverse_needed(geometry, compare_geometry):
+
+            if is_reverse_needed(geometry, compare_geometry):
                 compare_geometry = reverse_linestring_coords(compare_geometry.wkt)
 
-            merge_linestring = shapely.ops.linemerge([compare_geometry, geometry])
-            processed_list.append(sub_id)
-            del_list.append(sub_id)
+            if is_continuous(geometry, compare_geometry):
+                merge_linestring = shapely.ops.linemerge([compare_geometry, geometry])
+                geometry = merge_linestring
+                processed_list.append(sub_id)
+                del_list.append(sub_id)
+                coastline_merge_dict[id] = geometry
+                break  # break inner for loop to start another round of merging
+
+            if sub_id == coastline_merge_dict.keys()[-1]:
+                merging = False
 
 
 # %%
