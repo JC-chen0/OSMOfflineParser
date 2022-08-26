@@ -10,6 +10,7 @@ import geopandas
 import time
 
 
+
 # %%
 class CoastlineHandler(osmium.SimpleHandler):
     def __init__(self):
@@ -19,6 +20,7 @@ class CoastlineHandler(osmium.SimpleHandler):
 
     def way(self, w):
         self.get_coastlines(w)
+
 
     # boundary and name if not exists, the coastline will be ignorable
     def get_coastlines(self, w):
