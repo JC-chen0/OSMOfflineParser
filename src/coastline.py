@@ -2,20 +2,52 @@ import geopandas
 import time
 import overpy
 import math
+import osmium
 
 from copy import deepcopy
 from typing import List, Dict
 from geopandas import GeoDataFrame
 from shapely.ops import polygonize, linemerge, unary_union
 from shapely import wkt
-from shapely.geometry import Point, LineString, MultiLineString, Polygon, shape, MultiPolygon
+from shapely.geometry import Point, LineString, MultiPolygon
 
-# 海岸線作業
-# 1. 本島海岸線，海岸線每一百公里sep一段，取其中一段的way_id作為海岸線一百公里的ID(Rule1)
-# 2. 離島要是發現有一些面積太小的，忽略他(Rule2)
-# 3. 假設台灣的海岸線總共1411公里，理論上分成15段，最後一段11公里，但現在換成14段，
-#    最後一段特別延伸，不要讓最後一段特別短
+wkt_factory = osmium.geom.WKTFactory()
 
+
+class CoastlineHandler(osmium.SimpleHandler):
+    def __init__(self):
+        super().__init__()
+        self.coastlines = {'id': [], 'name': [], 'boundary': [], 'geometry': []}
+
+    def way(self, w):
+        self.get_coastlines(w)
+
+    def get_coastlines(self, w):
+        coastline_id = w.id
+        name = w.tags.get("name") if w.tags.get("name") else "UNKNOWN"
+        boundary = w.tags.get("boundary") if w.tags.get("boundary") else "UNKNOWN"
+        natural = w.tags.get("natural")
+        if natural == "coastline":
+            coastline = wkt.loads(wkt_factory.create_linestring(w))
+            try:
+                self.append_coastline_attribute(self.coastlines, coastline_id, name, boundary, coastline)
+            except Exception as e:
+                pass
+
+    def append_coastline_attribute(self, attributes: dict, coastline_id: str, name: str, boundary: str,
+                                   geometry):
+        attributes["id"].append(coastline_id)
+        attributes["name"].append(name)
+        attributes["boundary"].append(boundary)
+        attributes["geometry"].append(geometry)
+
+
+coastline_handler = CoastlineHandler()
+coastline_handler.apply_file("data/input/taiwan-latest.osm.pbf", idx="flex_mem", locations=True)
+coastline_df = geopandas.GeoDataFrame(coastline_handler.coastlines, geometry="geometry")
+coastline_df.to_file("data/input/general_coastline_taiwan.geojson", driver="GeoJSON")
+
+# %%
 origin_coastline_dict = geopandas.read_file("data\\input\\general_coastline_taiwan.geojson")
 
 
@@ -130,20 +162,6 @@ def get_relation_polygon(rel_id: str) -> MultiPolygon:
     borders = unary_union(merged)
     polygons = MultiPolygon(list(polygonize(borders)))
     return polygons
-
-
-def get_way_polygon(way_id: str) -> Polygon:
-    api = overpy.Overpass()
-    query_msg = f"""
-    way({way_id});
-    (._;>;);
-    out;
-    """
-    query_result = api.query(query_msg)
-    way = query_result.ways[0]  # 'cause there will be only one way.
-    nodes = way.get_nodes(resolve_missing=True)
-    polygon = Polygon([Point(node.lon, node.lat) for node in nodes])
-    return polygon
 
 
 # %% Merge all coastline
