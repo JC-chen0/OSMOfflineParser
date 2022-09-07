@@ -1,9 +1,16 @@
+import time
+from copy import deepcopy
+from typing import Dict
+
 import osmium
+from geopandas import GeoDataFrame
 from shapely import wkt
 import geopandas
 from shapely.geometry import Point, LineString, Polygon
+from shapely.ops import linemerge
 
-wktfab = osmium.geom.WKTFactory()
+# %%
+wkt_factory = osmium.geom.WKTFactory()
 
 
 class HighwayHandler(osmium.SimpleHandler):
@@ -11,9 +18,8 @@ class HighwayHandler(osmium.SimpleHandler):
     highways_with_level = dict(zip(highways_type, [1, 2, 3, 4, 5]))
 
     def __init__(self):
-        osmium.SimpleHandler.__init__(self)
-        self.road_names = []
-        self.highways = {'id': [], 'way_name': [], 'way_geometry': [], 'highway': [], 'way_level': []}
+        super().__init__()
+        self.highways = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'POLYGON_STR': [], 'HOFN_TYPE': [], 'HOFN_LEVEL': []}
 
     def way(self, w):
         self.get_ways(w)
@@ -23,85 +29,88 @@ class HighwayHandler(osmium.SimpleHandler):
         name = w.tags.get("name") if w.tags.get("name") else "UNKNOWN"
         highway = w.tags.get("highway")
         if highway in HighwayHandler.highways_type:
-            line = wkt.loads(wktfab.create_linestring(w))
-            self.append_way_attribute(way_id, name, line, highway, self.get_way_level(highway))
+            line = wkt.loads(wkt_factory.create_linestring(w))
+            self.append_way_attribute(way_id, name, line, self.get_way_level(highway))
 
     def get_way_level(self, highway_tag: str) -> int:
         return HighwayHandler.highways_with_level.get(highway_tag)
 
-    def append_way_attribute(self, way_id: str, name: str, line: LineString, highway: str, level: int):
-        self.highways.get('id').append(way_id)
-        self.highways.get('way_name').append(name)
-        self.highways.get('way_geometry').append(line)
-        self.highways.get('highway').append(highway)
-        self.highways.get('way_level').append(level)
-
-    def box_in_taipei(self):
-        taipei = osmium.osm.Box
+    def append_way_attribute(self, way_id: str, name: str, line: LineString, level: int):
+        self.highways.get('POLYGON_ID').append(way_id)
+        self.highways.get('POLYGON_NAME').append(name)
+        self.highways.get('POLYGON_STR').append(line)
+        self.highways.get('HOFN_TYPE').append(7)
+        self.highways.get('HOFN_LEVEL').append(level)
 
 
 h = HighwayHandler()
-h.apply_file("data//input//taiwan-latest.osm.pbf", locations=True, idx="flex_mem")
-result = geopandas.GeoDataFrame(h.highways, geometry="way_geometry")
+h.apply_file("data\\input\\country\\taiwan-latest.osm.pbf", locations=True, idx="flex_mem")
+result = geopandas.GeoDataFrame(h.highways, geometry="POLYGON_STR")
+result.to_file("data\\output\\highway\\unmerged_highway.geojson", driver="GeoJSON")
+
 
 # %%
 
-# TODO: Link seperated ways
-# step 0: search for related name
-# step 1: find wkt head and tail . If self head or tail match other's head or tail, then link them
+def reverse_linestring_coords(geometry) -> LineString:
+    geometry.coords = list(geometry.coords)[::-1]
 
-ways = result.loc[result.way_name == "重慶北路一段"]
-ways = ways[ways.way_geometry.is_valid]
+def is_continuous(line1, line2):
+    head, tail = line1.coords[0], line1.coords[-1]
+    compare_head, compare_tail = line2.coords[0], line2.coords[-1]
+    return head == compare_tail or tail == compare_head
+
+
+def is_reverse_needed(line1, line2):
+    head, tail = line1.coords[0], line1.coords[-1]
+    compare_head, compare_tail = line2.coords[0], line2.coords[-1]
+    return (head == compare_head and tail != compare_tail) or (tail == compare_tail and head != compare_head)
+
+
+def get_merged_highway(unmerged_highways_df: GeoDataFrame) -> Dict:
+    highway_dict = unmerged_highways_df.set_index(unmerged_highways_df["POLYGON_ID"]).to_dict('index')
+    highway_merge_dict = deepcopy(highway_dict)
+    start_time = time.time()
+    processed_list = []
+    for highway_id, highway_dict in highway_dict.items():
+        if highway_id in processed_list:
+            continue
+        geometry = highway_dict["geometry"]
+        level = highway_dict["HOFN_LEVEL"]
+        merging = True
+        while merging:
+            for compare_id, compare_highway in highway_merge_dict.items():
+                compare_geometry = compare_highway["geometry"]
+                compare_level = compare_highway["HOFN_LEVEL"]
+
+                if compare_id == list(highway_merge_dict.keys())[-1]:
+                    print(f"{highway_id} merge process completed, start another round.")
+                    merging = False
+                    break
+
+                if level != compare_level or highway_id == compare_id:
+                    continue
+
+                ############################################
+                if is_reverse_needed(geometry, compare_geometry):
+                    compare_geometry = reverse_linestring_coords(compare_geometry)
+                elif is_continuous(geometry, compare_geometry):
+                    merge_linestring = linemerge([compare_geometry, geometry])
+                    geometry = merge_linestring
+                    highway_merge_dict.get(highway_id)["geometry"] = geometry
+
+                    # remove merged id
+                    highway_merge_dict.pop(compare_id)
+                    processed_list.append(compare_id)
+                    print(f"{highway_id} merge with {compare_id}, break, {compare_id} will be removed.")
+                    break  # break inner for loop to start another round of merging
+    return highway_merge_dict
+
 
 # %%
-ways_dict = dict()
-processed_id_way = []
-for idx, row in ways.iterrows():
-    geometry = row.way_geometry
-
-    if row.id in processed_id_way:
-        continue
-
-    # init
-    if row.id not in ways_dict:
-        ways_dict[row.id] = []
-
-    # get head and tail in split() way
-    # head = row.coords[0]
-    # tail = row.coords[-1]
-
-    # boundary
-    head, tail = geometry.boundary
-
-    for sub_geometry in ways.way_geometry.tolist():
-        sub_head, sub_tail = sub_geometry.boundary
-
-        # Same linestring
-        if head == sub_head and tail == sub_tail:
-            pass
-        if head == sub_head:
-            pass
-        if tail == sub_head:
-            pass
-        if head == sub_tail:
-            pass
-        if tail == sub_tail:
-            pass
-
-        processed_id_way.append(row.id)
-        ways_dict[row.id].append(row)
-
-# tsv
-# result.to_csv(f"ways_level_1.tsv", sep="\t")
-# geojson
-# result.to_file("..//..//data//output//ways_level.geojson", driver="GeoJSON")
-
+unmerged_highways = geopandas.read_file("data\\output\\highway\\unmerged_highway.geojson")
 # %%
-# Second method: linemarge?
-from shapely.geometry import MultiLineString, LineString
-from functools import reduce
-from shapely.ops import linemerge
+merged_start_time = time.time()
+merged_highway_dict = get_merged_highway(unmerged_highways)
+merged_end_time = time.time()
+print(f"Merged highway process completed, taking {merged_end_time - merged_start_time}")
 
-ways_union = reduce(LineString.union, ways.way_geometry)
-ways_merge = linemerge(ways_union)
-# 　No polygon id -> depreciated
