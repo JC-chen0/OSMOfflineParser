@@ -4,6 +4,7 @@ import osmium
 from shapely import wkt
 import geopandas
 from shapely.geometry import LineString
+from typing import List
 
 from src.utils.merging_utils import get_merged
 
@@ -37,6 +38,7 @@ class HighwayHandler(osmium.SimpleHandler):
         self.highways.get('POLYGON_ID').append(way_id)
         self.highways.get('POLYGON_NAME').append(name)
         self.highways.get('POLYGON_STR').append(line)
+        # http://redmine.ghtinc.com/projects/chtcovms/wiki/Landusage
         self.highways.get('HOFN_TYPE').append(7)
         self.highways.get('HOFN_LEVEL').append(level)
 
@@ -55,3 +57,4 @@ merged_end_time = time.time()
 print(f"Merged highway process completed, taking {merged_end_time - merged_start_time}")
 result = geopandas.GeoDataFrame.from_dict(merged_highway_dict, orient="index")
 result.to_file("data\\output\\highway\\merged_highway.geojson", driver="GeoJSON")
+

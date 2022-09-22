@@ -1,83 +1,66 @@
+from typing import Dict, List
+
 import osmium
 from shapely import wkt
-import geopandas
-from shapely.geometry import Point, LineString, Polygon
-from shapely.ops import polygonize
 
 wktfab = osmium.geom.WKTFactory()
 
 
-# %%
-class WayWaterHandler(osmium.SimpleHandler):
-    def __init__(self):
-        super().__init__()
-        self.way_waters = {'water_id': [], 'water_name': [], 'water_geometry': []}
-        self.err_way_waters = {'water_id': [], 'water_name': [], 'water_geometry': []}
-        
-    def way(self, w):
-        self.get_way_waters(w)
-
-    def get_way_waters(self, w):
-        water_id = w.id
-        name = w.tags.get("name") if w.tags.get("name") else "UNKNOWN"
-        water = w.tags.get("natural")
-        if water == "water":
-            way = wkt.loads(wktfab.create_linestring(w))
-            try:
-                polygon = list(polygonize(way))
-                self.append_water_attribute(self.way_waters, water_id, name, polygon[0])
-            except:
-                self.append_water_attribute(self.err_way_waters, water_id, name, way)
-
-    def append_water_attribute(self, waters: dict, water_id: str, water_name: str, water_geometry):
-        waters["water_id"].append(water_id)
-        waters["water_name"].append(water_name)
-        waters["water_geometry"].append(water_geometry)
-
-
-# %%
-class RelationWaterHandler(osmium.SimpleHandler):
-    def __init__(self):
-        super.__init__()
-        self.rel_waters = {'water_id': [], 'water_name': [], 'water_geometry': []}
-
-    def relation(self, r):
-        self.get_relation_waters(r)
-
-    def get_relation_waters(self, r):
-        water_id = r.id
-        name = r.tags.get("name") if r.tags.get("name") else "UNKNOWN"
-        water = r.tags.get("natural")
-        if water == "water":
-            for member in r.members:
-                polygon_id = member.ref
-                polygon = wkt.loads(wktfab.create_linestring(r.member))
-
-    def append_rel_water_attribute(self, water_id: str, water_name: str, water_geometry):
-        self.rel_waters["water_id"].append(water_id)
-        self.rel_waters["water_name"].append(water_name)
-        self.rel_waters["water_geometry"].append(water_geometry)
-
-
-# %%
+# WATER_ID -> Using WAY id
 class AreaWaterHandler(osmium.SimpleHandler):
     def __init__(self):
-        super.__init__()
-        self.area_waters = {"area_id": [], "id": [], "geometry": []}
+        super().__init__()
+        # from way
+        self.way_waters = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'POLYGON_STR': [], 'HOFN_TYPE': [], 'HOFN_LEVEL': []}
+        # from rel
+        self.rel_waters = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'POLYGON_STR': [], 'HOFN_TYPE': [], 'HOFN_LEVEL': []}
+
+        self.relation_dict: Dict[List[Dict]] = dict()  # RelationID: [{ID,ROLE,TYPE}]
+
+    def area(self, area):
+        try:
+            if area.tags.get("natural") == "water":
+                water_id = area.orig_id()
+                water_name = area.tags.get("name")  # create new string object
+                water_geometry = wkt.loads(wktfab.create_multipolygon(area))
+                if area.from_way():
+                    # All area from way is one polygon (len(POLYGON_STR) == 1)
+                    water_geometry = list(water_geometry)[0]  # Extract polygon from multipolygon
+                    self.append(self.way_waters, water_id, water_name, water_geometry)
+                else:
+                    self.append(self.rel_waters, water_id, water_name, water_geometry)
+
+        except:
+            pass
+
+    def append(self, waters: dict, id, name, geometry):
+        waters.get("POLYGON_ID").append(id)
+        waters.get("POLYGON_NAME").append(name)
+        waters.get("POLYGON_STR").append(geometry)
+        waters.get("HOFN_TYPE").append("1")
+        waters.get("HOFN_LEVEL").append("1")
+
+    def relation(self, relation):
+        if relation.tags.get("natural") == "water":
+            for member in relation.members:
+                if not self.relation_dict.get(relation.id, False):
+                    self.relation_dict[relation.id] = []
+                self.relation_dict[relation.id].append({"ID": member.ref, "ROLE": member.role, "TYPE": member.type})
+                # TODO: If type = relation? how to resolve it
+
+
+area_handler = AreaWaterHandler()
+area_handler.apply_file("data\\input\\country\\taiwan-latest.osm.pbf", idx="flex_mem", locations=True)
 
 # %%
-water_handler = WayWaterHandler()
-print(dir(super(WayWaterHandler)))
+import geopandas
+import pandas
+relation_dict = pandas.DataFrame()
+way_waters = geopandas.GeoDataFrame(area_handler.way_waters, geometry="POLYGON_STR")
+rel_waters = geopandas.GeoDataFrame(area_handler.rel_waters, geometry="POLYGON_STR")
+way_waters.to_file("data\\output\\water\\way_waters.geojson", driver="GeoJSON")
+rel_waters.to_file("data\\output\\water\\rel_waters.geojson", driver="GeoJSON")
 
 # %%
-water_handler = WayWaterHandler()
-water_handler.apply_file("..//..//data//input//taiwan-latest.osm.pbf", idx="flex_mem", locations=True)
-# %%
-water_handler = WayWaterHandler()
-water_handler.apply_file("..//..//data//input//taiwan-latest.osm.pbf", idx="flex_mem", locations=True)
-
-way_result = geopandas.GeoDataFrame(water_handler.way_waters, geometry="water_geometry")
-err_way_result = geopandas.GeoDataFrame(water_handler.err_way_waters, geometry="water_geometry")
-
-way_result.to_file("..//..//data//output//way_water_result.geojson", driver="GeoJSON", encoding="utf-8")
-err_way_result.to_file("..//..//data//output//err_way_water_result.geojson", driver="GeoJSON", encoding="utf-8")
+# waters from way doesn't need to modify anything.
+result = way_waters
