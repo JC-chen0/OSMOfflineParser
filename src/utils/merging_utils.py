@@ -124,9 +124,9 @@ def get_merged_and_divided_by_threshold(geometry_dict, tolerance, length_thresho
 
 
 # TODO: Tuning performance using multiprocess
-def prepare_data(file_path: str, intersection_polygon_wkt: str) -> GeoDataFrame:
-    data_df = geopandas.read_file(file_path)
-    geometries = data_df["geometry"]
+def prepare_data(data_df: GeoDataFrame, intersection_polygon_wkt: str) -> GeoDataFrame:
+
+    geometries = data_df["POLYGON_STR"]
     polygon = wkt.loads(intersection_polygon_wkt)
     data_df["in_polygon"] = geometries.intersects(polygon)
     data_df = data_df[data_df["in_polygon"]]
@@ -155,3 +155,4 @@ def get_relation_polygon(rel_id: str) -> MultiPolygon:
     borders = unary_union(merged)
     polygons = MultiPolygon(list(polygonize(borders)))
     return polygons
+
