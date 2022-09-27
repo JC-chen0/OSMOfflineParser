@@ -1,3 +1,4 @@
+import logging
 import math
 import time
 import geopandas
@@ -10,7 +11,7 @@ from shapely.geometry import LineString, MultiPolygon, Point
 from shapely.ops import linemerge, unary_union, polygonize
 
 
-def reverse_linestring_coords(geometry) -> LineString:
+def reverse_linestring_coords(geometry):
     geometry.coords = list(geometry.coords)[::-1]
 
 
@@ -23,7 +24,7 @@ def is_continuous(line1, line2):
 def is_reverse_needed(line1, line2):
     head, tail = line1.coords[0], line1.coords[-1]
     compare_head, compare_tail = line2.coords[0], line2.coords[-1]
-    return (head == compare_head and tail != compare_tail) or (tail == compare_tail and head != compare_head)
+    return head == compare_head or tail == compare_tail
 
 
 def lonlat_length_in_km(geom):
@@ -37,7 +38,7 @@ def get_merged(unmerged_highways_df: GeoDataFrame) -> Dict:
     start_time = time.time()
     processed_list = []
     for highway_id, highway_dict in highway_dict.items():
-        print(f"{highway_id} start merging")
+        logging.info(f"{highway_id} start merging")
         if highway_id in processed_list:
             continue
         geometry = highway_dict['geometry']
@@ -49,7 +50,7 @@ def get_merged(unmerged_highways_df: GeoDataFrame) -> Dict:
                 compare_level = compare_highway["HOFN_LEVEL"]
 
                 if compare_id == list(highway_merge_dict.keys())[-1]:
-                    print(f"{highway_id} merge process completed, start another round.")
+                    logging.info(f"{highway_id} merge process completed, start another round.")
                     merging = False
                     break
 
@@ -66,7 +67,7 @@ def get_merged(unmerged_highways_df: GeoDataFrame) -> Dict:
                     # remove merged id
                     highway_merge_dict.pop(compare_id)
                     processed_list.append(compare_id)
-                    print(f"{highway_id} merge with {compare_id}, break, {compare_id} will be removed.")
+                    logging.info(f"{highway_id} merge with {compare_id}, break, {compare_id} will be removed.")
                     break
     return highway_merge_dict
 
@@ -110,7 +111,7 @@ def get_merged_and_divided_by_threshold(geometry_dict, tolerance, length_thresho
                     reach_length_limit_list.append(start_id)
                     compare_geometry_dict.get(start_id)["geometry"] = start_line
                     # Restart looping
-                    print(f"{start_id} reach length limit. Next start line will use {compare_poly_id}")
+                    logging.info(f"{start_id} reach length limit. Next start line will use {compare_poly_id}")
                     start_id = compare_poly_id
                     start_line = compare_geometry
                     break
@@ -118,15 +119,14 @@ def get_merged_and_divided_by_threshold(geometry_dict, tolerance, length_thresho
                 start_line = merge_linestring
                 # remove merged id
                 compare_geometry_dict.pop(compare_poly_id)
-                print(f"{start_id} merge with {compare_poly_id}, break, {compare_poly_id} will be removed.")
+                logging.info(f"{start_id} merge with {compare_poly_id}, break, {compare_poly_id} will be removed.")
                 break
     return compare_geometry_dict
 
 
 # TODO: Tuning performance using multiprocess
-def prepare_data(data_df: GeoDataFrame, intersection_polygon_wkt: str) -> GeoDataFrame:
-
-    geometries = data_df["POLYGON_STR"]
+def prepare_data(data_df: GeoDataFrame, intersection_polygon_wkt: str, geometry_column: str) -> GeoDataFrame:
+    geometries = data_df[geometry_column]
     polygon = wkt.loads(intersection_polygon_wkt)
     data_df["in_polygon"] = geometries.intersects(polygon)
     data_df = data_df[data_df["in_polygon"]]
@@ -156,3 +156,8 @@ def get_relation_polygon(rel_id: str) -> MultiPolygon:
     polygons = MultiPolygon(list(polygonize(borders)))
     return polygons
 
+
+def read_file_and_rename_geometry(file_path: str):
+    tmp = geopandas.read_file("file_path")
+    tmp = tmp.rename({"geometry": "POLYGON_STR"})
+    return tmp

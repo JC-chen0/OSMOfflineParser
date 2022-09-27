@@ -21,7 +21,7 @@ handlers:
             class: logging.handlers.RotatingFileHandler
             level: INFO
             formatter: default
-            filename: logs\\info-0926.log
+            filename: logs\\info-0926-1.log
             maxBytes: 20971520
             backupCount: 1
             encoding: utf8
@@ -29,7 +29,7 @@ handlers:
             class: logging.handlers.RotatingFileHandler
             level: DEBUG
             formatter: default
-            filename: logs\\debug-0926.log
+            filename: logs\\debug-0926-1.log
             maxBytes: 20971520
             backupCount: 1
             encoding: utf8
