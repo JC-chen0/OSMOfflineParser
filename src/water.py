@@ -113,7 +113,7 @@ def inners_extracting(inners: List[Dict], islands: List[Dict]):
         islands.append(append)
 
 
-def get_merged(rings: list, polygon_id_used_table: list) -> List[Dict]:
+def get_merged_rings(rings: list, polygon_id_used_table: list) -> List[Dict]:
     ############ INLINE FUNCTION ########
     def get_merged_line(ring, merging_candidates: list, merged_way_ids: list) -> LineString:
         merging_line = ring.get("GEOMETRY")
@@ -173,7 +173,6 @@ def polygonize_with_try_catch(row, remove_list):
         return row["POLYGON_STR"]
 
 
-# %%
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("input", type=str, help="Input osm.pbf file path.")
@@ -242,13 +241,13 @@ if __name__ == "__main__":
         logging.debug(f"Relation: {relation_id} doing merge.")
         outers = relation.get("outer")
         if outers:
-            outers = get_merged(outers, polygon_id_used_table)
+            outers = get_merged_rings(outers, polygon_id_used_table)
             relation_member_dict[relation_id] = outers
             for outer in outers:
                 relation_result.append(outer)
         inners = relation.get("inner")
         if inners:
-            inners = get_merged(inners, polygon_id_used_table)
+            inners = get_merged_rings(inners, polygon_id_used_table)
             inners_extracting(inners, islands)
 
         logging.debug("outer and inner merge process completed.")

@@ -31,6 +31,7 @@ def lonlat_length_in_km(geom):
     return geom.length * 6371 * math.pi / 180
 
 
+
 # TODO: Tuning performance
 def get_merged(unmerged_highways_df: GeoDataFrame) -> Dict:
     highway_dict = unmerged_highways_df.set_index(unmerged_highways_df["POLYGON_ID"]).to_dict('index')
@@ -38,19 +39,19 @@ def get_merged(unmerged_highways_df: GeoDataFrame) -> Dict:
     start_time = time.time()
     processed_list = []
     for highway_id, highway_dict in highway_dict.items():
-        logging.info(f"{highway_id} start merging")
+        logging.debug(f"{highway_id} start merging")
         if highway_id in processed_list:
             continue
-        geometry = highway_dict['geometry']
+        geometry = highway_dict['POLYGON_STR']
         level = highway_dict["HOFN_LEVEL"]
         merging = True
         while merging:
             for compare_id, compare_highway in highway_merge_dict.items():
-                compare_geometry = compare_highway["geometry"]
+                compare_geometry = compare_highway["POLYGON_STR"]
                 compare_level = compare_highway["HOFN_LEVEL"]
 
                 if compare_id == list(highway_merge_dict.keys())[-1]:
-                    logging.info(f"{highway_id} merge process completed, start another round.")
+                    logging.debug(f"{highway_id} merge process completed, start another round.")
                     merging = False
                     break
 
@@ -63,11 +64,11 @@ def get_merged(unmerged_highways_df: GeoDataFrame) -> Dict:
                 elif is_continuous(geometry, compare_geometry):
                     merge_linestring = linemerge([compare_geometry, geometry])
                     geometry = merge_linestring
-                    highway_merge_dict.get(highway_id)["geometry"] = geometry
+                    highway_merge_dict.get(highway_id)["POLYGON_STR"] = geometry
                     # remove merged id
                     highway_merge_dict.pop(compare_id)
                     processed_list.append(compare_id)
-                    logging.info(f"{highway_id} merge with {compare_id}, break, {compare_id} will be removed.")
+                    logging.debug(f"{highway_id} merge with {compare_id}, break, {compare_id} will be removed.")
                     break
     return highway_merge_dict
 
@@ -76,13 +77,13 @@ def get_merged_and_divided_by_threshold(geometry_dict, tolerance, length_thresho
     compare_geometry_dict = deepcopy(geometry_dict)
     reach_length_limit_list = []
     start_id = next(iter(compare_geometry_dict))
-    start_line = compare_geometry_dict.get(start_id).get("geometry")
+    start_line = compare_geometry_dict.get(start_id).get("POLYGON_STR")
     merging = True
     last_segment = False
     count = 0
     while merging:
         for compare_poly_id, compare_poly_dict in compare_geometry_dict.items():
-            compare_geometry = compare_poly_dict["geometry"]
+            compare_geometry = compare_poly_dict["POLYGON_STR"]
 
             if compare_poly_id in reach_length_limit_list and not last_segment:
 
@@ -104,14 +105,14 @@ def get_merged_and_divided_by_threshold(geometry_dict, tolerance, length_thresho
                     if start_line.length * 6371 * math.pi / 180 > tolerance:
                         merging = False
 
-                    compare_geometry_dict.get(start_id)["geometry"] = merge_linestring
+                    compare_geometry_dict.get(start_id)["POLYGON_STR"] = merge_linestring
                     merging = False
 
                 elif merge_linestring.length * 6371 * math.pi / 180 >= length_threshold:
                     reach_length_limit_list.append(start_id)
-                    compare_geometry_dict.get(start_id)["geometry"] = start_line
+                    compare_geometry_dict.get(start_id)["POLYGON_STR"] = start_line
                     # Restart looping
-                    logging.info(f"{start_id} reach length limit. Next start line will use {compare_poly_id}")
+                    logging.debug(f"{start_id} reach length limit. Next start line will use {compare_poly_id}")
                     start_id = compare_poly_id
                     start_line = compare_geometry
                     break
@@ -119,8 +120,9 @@ def get_merged_and_divided_by_threshold(geometry_dict, tolerance, length_thresho
                 start_line = merge_linestring
                 # remove merged id
                 compare_geometry_dict.pop(compare_poly_id)
-                logging.info(f"{start_id} merge with {compare_poly_id}, break, {compare_poly_id} will be removed.")
+                logging.debug(f"{start_id} merge with {compare_poly_id}, break, {compare_poly_id} will be removed.")
                 break
+    logging.debug(f"Re-merge and dividing completed.")
     return compare_geometry_dict
 
 
@@ -158,6 +160,6 @@ def get_relation_polygon(rel_id: str) -> MultiPolygon:
 
 
 def read_file_and_rename_geometry(file_path: str):
-    tmp = geopandas.read_file("file_path")
-    tmp = tmp.rename({"geometry": "POLYGON_STR"})
+    tmp = geopandas.read_file(file_path)
+    tmp.rename_geometry("POLYGON_STR", inplace=True)
     return tmp
