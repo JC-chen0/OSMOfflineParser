@@ -1,14 +1,12 @@
 import logging
 import math
-import time
+
 import geopandas
-import overpy
 from copy import deepcopy
 from typing import Dict
-from geopandas import GeoDataFrame, GeoSeries
+from geopandas import GeoDataFrame
 from shapely import wkt
-from shapely.geometry import LineString, MultiPolygon, Point
-from shapely.ops import linemerge, unary_union, polygonize
+from shapely.ops import linemerge
 
 
 def reverse_linestring_coords(geometry):
@@ -31,47 +29,70 @@ def lonlat_length_in_km(geom):
     return geom.length * 6371 * math.pi / 180
 
 
+def merge_with_candidates_dict(row,unmerged_ids,unmerged,candidates: dict):
+    # row, unmerged_ids: do traversal and merge
+    # unmerged: final merged result
+    # candidates: merging candidate
 
-# TODO: Tuning performance
-def get_merged(unmerged_highways_df: GeoDataFrame) -> Dict:
-    highway_dict = unmerged_highways_df.set_index(unmerged_highways_df["POLYGON_ID"]).to_dict('index')
-    highway_merge_dict = deepcopy(highway_dict)
-    start_time = time.time()
-    processed_list = []
-    for highway_id, highway_dict in highway_dict.items():
-        logging.debug(f"{highway_id} start merging")
-        if highway_id in processed_list:
-            continue
-        geometry = highway_dict['POLYGON_STR']
-        level = highway_dict["HOFN_LEVEL"]
-        merging = True
-        while merging:
-            for compare_id, compare_highway in highway_merge_dict.items():
-                compare_geometry = compare_highway["POLYGON_STR"]
-                compare_level = compare_highway["HOFN_LEVEL"]
+    logging.debug(f"{row['POLYGON_ID']} start merging.")
+    candidates_ids = list(candidates.keys())
+    candidates_values = list(candidates.values())
 
-                if compare_id == list(highway_merge_dict.keys())[-1]:
-                    logging.debug(f"{highway_id} merge process completed, start another round.")
-                    merging = False
-                    break
+    # Use reverse traversal to remove merged id
+    i = len(candidates) - 1
+    while i >= 0:
+        candidate_id = candidates_ids[i]
+        candidate_value = candidates_values[i]
+        candidate_geometry = candidate_value["POLYGON_STR"]
+        if is_reverse_needed(row["POLYGON_STR"], candidate_geometry):
+            reverse_linestring_coords(candidate_geometry)
+            logging.debug(f"{candidate_id} reversed.")
+        if is_continuous(row["POLYGON_STR"], candidate_geometry):
+            unmerged[row["POLYGON_ID"]]["POLYGON_STR"] = linemerge([row["POLYGON_STR"], candidate_geometry])
+            logging.debug(f"{row['POLYGON_ID']} merge with {candidate_id}")
 
-                if level != compare_level or highway_id == compare_id:
-                    continue
+            candidates_ids.remove(candidate_id)
+            candidates_values.remove(candidate_value)
+            unmerged_ids.remove(candidate_id)
+            unmerged.pop(candidate_id)
+            candidates.pop(candidate_id)
+            i = len(candidates_ids) - 1
+        i -= 1
+    return row
 
-                ############################################
-                if is_reverse_needed(geometry, compare_geometry):
-                    compare_geometry = reverse_linestring_coords(compare_geometry)
-                elif is_continuous(geometry, compare_geometry):
-                    merge_linestring = linemerge([compare_geometry, geometry])
-                    geometry = merge_linestring
-                    highway_merge_dict.get(highway_id)["POLYGON_STR"] = geometry
-                    # remove merged id
-                    highway_merge_dict.pop(compare_id)
-                    processed_list.append(compare_id)
-                    logging.debug(f"{highway_id} merge with {compare_id}, break, {compare_id} will be removed.")
-                    break
-    return highway_merge_dict
 
+def merge_with_candidates(row, candidates: dict, processed_ids: list):
+    if row["POLYGON_ID"] in processed_ids:
+        row["POLYGON_STR"] = None
+        return
+    if row["POLYGON_ID"] in candidates.keys():
+        candidates.pop(row["POLYGON_ID"])
+
+    logging.debug(f"{row['POLYGON_ID']} start merging.")
+
+    i = len(candidates) - 1
+    candidates_ids = list(candidates.keys())
+    candidates_values = list(candidates.values())
+    while i >= 0:
+        candidate_id = candidates_ids[i]
+        candidate_value = candidates_values[i]
+        delete_id = None
+        candidate_geometry = candidate_value["POLYGON_STR"]
+        if is_reverse_needed(row["POLYGON_STR"], candidate_geometry):
+            reverse_linestring_coords(candidate_geometry)
+            logging.debug(f"{candidate_id} reversed.")
+        if is_continuous(row["POLYGON_STR"], candidate_geometry):
+            row["POLYGON_STR"] = linemerge([row["POLYGON_STR"], candidate_geometry])
+            processed_ids.append(candidate_id)
+
+            logging.debug(f"{row['POLYGON_ID']} merge with {candidate_id}")
+            candidates_ids.remove(candidate_id)
+            candidates_values.remove(candidate_value)
+            i = len(candidates_ids) - 1
+        i -= 1
+    return row
+
+    ####################################################################################
 
 def get_merged_and_divided_by_threshold(geometry_dict, tolerance, length_threshold) -> Dict:
     compare_geometry_dict = deepcopy(geometry_dict)
@@ -125,8 +146,6 @@ def get_merged_and_divided_by_threshold(geometry_dict, tolerance, length_thresho
     logging.debug(f"Re-merge and dividing completed.")
     return compare_geometry_dict
 
-
-# TODO: Tuning performance using multiprocess
 def prepare_data(data_df: GeoDataFrame, intersection_polygon_wkt: str, geometry_column: str) -> GeoDataFrame:
     geometries = data_df[geometry_column]
     polygon = wkt.loads(intersection_polygon_wkt)
@@ -134,29 +153,6 @@ def prepare_data(data_df: GeoDataFrame, intersection_polygon_wkt: str, geometry_
     data_df = data_df[data_df["in_polygon"]]
     del data_df["in_polygon"]
     return data_df
-
-
-def get_relation_polygon(rel_id: str) -> MultiPolygon:
-    api = overpy.Overpass()
-    query_msg = f"""
-    [out:json][timeout:25];
-    rel({rel_id});
-    out body;
-    >;
-    out skel qt; 
-    """
-    result = api.query(query_msg)
-    lineStrings = []
-    for key, way in enumerate(result.ways):
-        linestring_coords = []
-        for node in way.nodes:
-            linestring_coords.append(Point(node.lon, node.lat))
-        lineStrings.append(LineString(linestring_coords))
-
-    merged = linemerge([*lineStrings])
-    borders = unary_union(merged)
-    polygons = MultiPolygon(list(polygonize(borders)))
-    return polygons
 
 
 def read_file_and_rename_geometry(file_path: str):

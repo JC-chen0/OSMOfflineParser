@@ -1,3 +1,4 @@
+import os
 import time
 import osmium
 import logging
@@ -12,50 +13,53 @@ from shapely import wkt
 from shapely.geometry import LineString, Polygon
 from shapely.ops import polygonize, linemerge
 from datetime import date
-from utils.merging_utils import is_reverse_needed, reverse_linestring_coords, is_continuous, prepare_data, get_relation_polygon
+from util.merging_utils import is_reverse_needed, reverse_linestring_coords, is_continuous, prepare_data, get_relation_polygon
+from src.enum.hofntype import HofnType
 
 # https://stackoverflow.com/questions/20625582/how-to-deal-with-settingwithcopywarning-in-pandas
 pandas.options.mode.chained_assignment = None  # default='warn'
 wktfab = osmium.geom.WKTFactory()
 
 
-# WATER_ID -> Using WAY id
-class AreaWaterHandler(osmium.SimpleHandler):
-    def __init__(self):
+# RING_ID -> Using WAY id
+class RingHandler(osmium.SimpleHandler):
+    def __init__(self, tags, mode):
         super().__init__()
         # from way
-        self.way_waters = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'POLYGON_STR': [], 'HOFN_TYPE': [], 'HOFN_LEVEL': []}
+        self.way_rings = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'POLYGON_STR': [], 'HOFN_TYPE': [], 'HOFN_LEVEL': []}
         # from rel
-        self.rel_waters = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'POLYGON_STR': [], 'HOFN_TYPE': [], 'HOFN_LEVEL': []}
+        self.rel_rings = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'POLYGON_STR': [], 'HOFN_TYPE': [], 'HOFN_LEVEL': []}
 
         self.relation_dict: Dict[List[Dict]] = dict()  # RelationID: [{ID,ROLE,TYPE}]
         self.way_dict: Dict[Dict] = dict()
+        self.mode = mode
+        self.tags = tags
 
     def area(self, area):
         try:
-            if area.tags.get("natural") == "water" or area.tags.get("landuse") == "reservoir" or area.tags.get("waterway") == "riverbank":
-                water_id = area.orig_id()
-                water_name = area.tags.get("name")  # create new string object
-                water_geometry = wkt.loads(wktfab.create_multipolygon(area))
+            if any([area.tags.get(key) == value for key, value in self.tags.items()]):
+                ring_id = area.orig_id()
+                ring_name = area.tags.get("name")  # create new string object
+                ring_geometry = wkt.loads(wktfab.create_multipolygon(area))
                 if area.from_way():
                     # All area from way is one polygon (len(POLYGON_STR) == 1)
-                    water_geometry = list(water_geometry)[0]  # Extract polygon from multipolygon
-                    self.append(self.way_waters, water_id, water_name, water_geometry)
+                    ring_geometry = list(ring_geometry)[0]  # Extract polygon from multipolygon
+                    self.append(self.way_rings, ring_id, ring_name, ring_geometry)
                 else:
-                    self.append(self.rel_waters, water_id, water_name, water_geometry)
+                    self.append(self.rel_rings, ring_id, ring_name, ring_geometry)
 
         except:
             pass
 
-    def append(self, waters: dict, id, name, geometry):
-        waters.get("POLYGON_ID").append(id)
-        waters.get("POLYGON_NAME").append(name)
-        waters.get("POLYGON_STR").append(geometry)
-        waters.get("HOFN_TYPE").append("1")
-        waters.get("HOFN_LEVEL").append("1")
+    def append(self, rings: dict, id, name, geometry):
+        rings.get("POLYGON_ID").append(id)
+        rings.get("POLYGON_NAME").append(name)
+        rings.get("POLYGON_STR").append(geometry)
+        rings.get("HOFN_TYPE").append(HofnType[self.mode].value)
+        rings.get("HOFN_LEVEL").append("1")
 
     def relation(self, relation):
-        if relation.tags.get("natural") == "water" or relation.tags.get("landuse") == "reservoir" or relation.tags.get("waterway") == "riverbank":
+        if any([relation.tags.get(key) == value for key, value in self.tags.items()]):
             for member in relation.members:
                 if not self.relation_dict.get(relation.id, False):
                     self.relation_dict[relation.id] = []
@@ -67,7 +71,7 @@ class AreaWaterHandler(osmium.SimpleHandler):
 
 
 def get_relation_member_data(relation_dict: Dict, way_dict: Dict) -> Dict:
-    water_rel_members_dict = {"RELATION_ID": [], "WAY_ID": [], "NAME": [], "GEOMETRY": [], "ROLE": [], "TYPE": []}
+    ring_rel_members_dict = {"RELATION_ID": [], "WAY_ID": [], "NAME": [], "GEOMETRY": [], "ROLE": [], "TYPE": []}
 
     for relation_id, members in relation_dict.items():
         for member in members:
@@ -75,13 +79,16 @@ def get_relation_member_data(relation_dict: Dict, way_dict: Dict) -> Dict:
                 continue
             way_id = member.get("ID")
             way = way_dict.get(way_id)
-            water_rel_members_dict.get("RELATION_ID").append(relation_id)
-            water_rel_members_dict.get("WAY_ID").append(way_id)
-            water_rel_members_dict.get("NAME").append(way.get("NAME"))
-            water_rel_members_dict.get("GEOMETRY").append(way.get("GEOMETRY"))
-            water_rel_members_dict.get("ROLE").append(member.get("ROLE"))
-            water_rel_members_dict.get("TYPE").append(member.get("TYPE"))
-    return water_rel_members_dict
+            if way:
+                ring_rel_members_dict.get("RELATION_ID").append(relation_id)
+                ring_rel_members_dict.get("WAY_ID").append(way_id)
+                ring_rel_members_dict.get("NAME").append(way.get("NAME"))
+                ring_rel_members_dict.get("GEOMETRY").append(way.get("GEOMETRY"))
+                ring_rel_members_dict.get("ROLE").append(member.get("ROLE"))
+                ring_rel_members_dict.get("TYPE").append(member.get("TYPE"))
+            else:
+                logging.debug(f"{way_id} cannot be found in way dict, please check.")
+    return ring_rel_members_dict
 
 
 # Restructure with outer and inner grouping
@@ -178,17 +185,28 @@ if __name__ == "__main__":
     parser.add_argument("input", type=str, help="Input osm.pbf file path.")
     parser.add_argument("output", type=str, help="Output geojson file path.")
     parser.add_argument("limit_relation", type=str, help="Relation id of limit area.")
-    arg = parser.parse_args()
-    input_path = arg.input
-    output_path = arg.output
-    limit_relation_id = arg.limit_relation
+    parser.add_argument("--mode", type=str, help="Process mode, Output file name")
+    parser.add_argument("--tags", type=str, help="format: tag_name1 search_value1 tag_name2 search_value2 ...", nargs="+")
 
-    # 1. Get waters data from osm.pbf file
+    args = parser.parse_args()
+    input_path = args.input
+    output_path = args.output
+    limit_relation_id = args.limit_relation
+    mode = args.mode
+    tags = {}
+    tmp = 0
+    while tmp < len(args.tags) - 1:
+        tag = args.tags[tmp]
+        value = args.tags[tmp + 1]
+        tags[args.tags[tmp]] = args.tags[tmp + 1]
+        tmp += 2
+
+    # 1. Get rings data from osm.pbf file
     try:
         with open('src/resource/logback.yaml', 'r') as stream:
             config = yaml.safe_load(stream)
-            config.get("handlers").get("info_file_handler")["filename"] = f"logs\\water\\{limit_relation_id}-{date.today()}.info"
-            config.get("handlers").get("debug_file_handler")["filename"] = f"logs\\water\\{limit_relation_id}-{date.today()}.debug"
+            config.get("handlers").get("info_file_handler")["filename"] = f"logs/{mode}/{limit_relation_id}-{date.today()}.info"
+            config.get("handlers").get("debug_file_handler")["filename"] = f"logs/{mode}/{limit_relation_id}-{date.today()}.debug"
             logging.config.dictConfig(config)
             stream.close()
     except Exception as e:
@@ -197,30 +215,33 @@ if __name__ == "__main__":
         logging.debug("Error in Logging Configuration, Using default configs")
 
     logging.info("============================================")
-    logging.info(f"INPUT ARGUMENTS: {arg}")
+    logging.info(f"WORKING DIRECTORY: {os.getcwd()}")
+    logging.info(f"INPUT ARGUMENTS: {args}")
     logging.info(f"INPUT FILE PATH: {input_path}")
     logging.info(f"OUTPUT FILE PATH: {output_path}")
     logging.info(f"RELATION ID OF LIMIT AREA: {limit_relation_id}")
+    logging.info(f"MODE: {mode}")
+    logging.info(f"SEARCH TAG WITH VALUE: {tags}")
     logging.info("============================================")
 
-    logging.info(f"Start extracting waters ...")
-    logging.info(f"[1/4] Loading waters data from {input_path},")
+    logging.info(f"Start extracting rings ...")
+    logging.info(f"[1/4] Loading data from {input_path}, tags: {tags}")
 
     start_time = time.time()
-    area_handler = AreaWaterHandler()
+    area_handler = RingHandler(tags,mode)
     area_handler.apply_file(input_path, idx="flex_mem", locations=True)
-    logging.debug(f"Get waters data completed, taking {time.time() - start_time}")
+    logging.debug(f"Get data completed, taking {time.time() - start_time} seconds")
 
     # 2. Get data prepared
     logging.info(f"[2/4] Preparing data with intersecting with relation id {limit_relation_id}")
     relation_dict = area_handler.relation_dict
     way_dict = area_handler.way_dict
-    way_waters = geopandas.GeoDataFrame(area_handler.way_waters, geometry="POLYGON_STR")
-    rel_waters = geopandas.GeoDataFrame(area_handler.rel_waters, geometry="POLYGON_STR")
+    way_rings = geopandas.GeoDataFrame(area_handler.way_rings, geometry="POLYGON_STR")
+    rel_rings = geopandas.GeoDataFrame(area_handler.rel_rings, geometry="POLYGON_STR")
     # Prepare data and free memory
     limit_area = get_relation_polygon(limit_relation_id)
-    way_waters = prepare_data(way_waters, limit_area.wkt, "POLYGON_STR")
-    rel_waters = prepare_data(rel_waters, limit_area.wkt, "POLYGON_STR")
+    way_rings = prepare_data(way_rings, limit_area.wkt, "POLYGON_STR")
+    rel_rings = prepare_data(rel_rings, limit_area.wkt, "POLYGON_STR")
 
     relation_member_dict: Dict = get_relation_member_data(relation_dict, way_dict)
     relation_member_data: geopandas.GeoDataFrame = geopandas.GeoDataFrame(relation_member_dict, geometry="GEOMETRY")
@@ -228,13 +249,13 @@ if __name__ == "__main__":
     relation_member_dict = relation_member_data.to_dict("index")
     relation_member_dict = restructure(relation_member_dict)
 
-    # 3.Merging waters
-    logging.info(f"[3/4] Merging waters with outer and inner rings, and extract inner rings as islands.")
+    # 3.Merging rings
+    logging.info(f"[3/4] Merging rings with outer and inner rings, and extract inner rings as islands.")
 
     # Avoid duplicate POLYGON_ID (WAY_ID)
     polygon_id_used_table = []
 
-    # Results with waters and islands
+    # Results with rings and islands
     relation_result = []
     islands = []
     for relation_id, relation in relation_member_dict.items():
@@ -253,22 +274,23 @@ if __name__ == "__main__":
         logging.debug("outer and inner merge process completed.")
 
     # 4. polygonized data and output.
+
     logging.info("[4/4] Polygonizing data and output.")
-    remove_id_list = []
-    islands = geopandas.GeoDataFrame(islands, geometry="POLYGON_STR")
-    islands["POLYGON_STR"] = islands.apply(lambda row: polygonize_with_try_catch(row, remove_id_list), axis=1)
-    islands = islands[~islands.POLYGON_ID.isin(remove_id_list)]
-    logging.debug(f"Remove {remove_id_list} from islands due to unpolygonizable issue.")
-    logging.debug("islands polygonized done")
+    if mode == "ring":
+        remove_id_list = []
+        islands = geopandas.GeoDataFrame(islands, geometry="POLYGON_STR")
+        islands["POLYGON_STR"] = islands.apply(lambda row: polygonize_with_try_catch(row, remove_id_list), axis=1)
+        islands = islands[~islands.POLYGON_ID.isin(remove_id_list)]
+        logging.debug(f"Remove {remove_id_list}  due to unpolygonizable issue.")
+        logging.debug("islands polygonized done")
+        islands.to_file(f"{output_path}\\islands.geojson", driver="GeoJSON")
 
     remove_id_list = []
-    waters = geopandas.GeoDataFrame(relation_result, geometry="POLYGON_STR")
-    waters = pandas.concat([waters, way_waters])
-    waters["POLYGON_STR"] = waters.apply(lambda row: polygonize_with_try_catch(row, remove_id_list), axis=1)
-    waters = waters[~waters["POLYGON_ID"].isin(remove_id_list)]
-    logging.debug(f"Remove {remove_id_list} from waters due to unpolygonizable issue.")
-    logging.debug("waters polygonized done.")
-
-    islands.to_file(f"{output_path}\\islands.geojson", driver="GeoJSON")
-    waters.to_file(f"{output_path}\\waters.geojson", driver="GeoJSON")
-    logging.info("Waters process completed.")
+    rings = geopandas.GeoDataFrame(relation_result, geometry="POLYGON_STR")
+    rings = pandas.concat([rings, way_rings])
+    rings["POLYGON_STR"] = rings.apply(lambda row: polygonize_with_try_catch(row, remove_id_list), axis=1)
+    rings = rings[~rings["POLYGON_ID"].isin(remove_id_list)]
+    logging.debug(f"Remove {remove_id_list}  due to unpolygonizable issue.")
+    logging.debug("rings polygonized done.")
+    rings.to_file(f"{output_path}\\{mode}.geojson", driver="GeoJSON")
+    logging.info("rings process completed.")
