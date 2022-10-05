@@ -1,4 +1,7 @@
 from argparse import ArgumentParser
+
+import geopandas
+
 from src.enum.hofntype import HofnType
 from src.enum.mcc import National
 import pandas
@@ -14,3 +17,5 @@ files = {hofn_type: pandas.read_csv(f"data/output/{HofnType(hofn_type).name}/{na
 
 for hofn_type, file in files.items():
     file.apply(lambda row: row["POLYGON_ID"] == f"{mcc}01{row['HOFN_TYPE']}{row['POLYGON_ID']}")
+
+nt2_geo_polygon = geopandas.GeoDataFrame()
