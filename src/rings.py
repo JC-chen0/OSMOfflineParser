@@ -17,7 +17,7 @@ from datetime import date
 from src.enum.mcc import National
 from src.util.limit_area import get_relation_polygon_with_overpy
 from src.util.merging_utils import is_reverse_needed, reverse_linestring_coords, is_continuous, prepare_data
-from src.enum.hofntype import HofnType
+from src.enum.hofn_type import HofnType
 
 # https://stackoverflow.com/questions/20625582/how-to-deal-with-settingwithcopywarning-in-pandas
 pandas.options.mode.chained_assignment = None  # default='warn'
@@ -235,19 +235,10 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, debuggi
     IS_VILLAGE = True if mode == "village" else False
     IS_WATER = True if mode == "water" else False
     island_output_path = f"data/output/island/{nation}"
-    if os.path.isdir(island_output_path):
+    if not os.path.isdir(island_output_path):
         os.makedirs(island_output_path)
 
     # 1. Get coastlines data from osm.pbf file
-    logging.info("============================================")
-    logging.info(f"MODE: {mode}")
-    logging.info(f"INPUT FILE PATH: {input_path}")
-    logging.info(f"OUTPUT FILE PATH: {output_path}")
-    logging.info(f"PROCESSING NATION: {nation}")
-    logging.info(f"RELATION ID OF LIMIT AREA: {limit_relation_id}")
-    logging.info(f"SEARCH TAG WITH VALUE: {tags}")
-    logging.info("============================================")
-
     logging.info(f"Start extracting rings ...")
     logging.info(f"[1/4] Loading data from {input_path}, tags: {tags}")
 
@@ -311,9 +302,9 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, debuggi
         logging.debug("islands polygonized done")
 
         if DEBUGGING:
-            islands.to_file(f"{island_output_path}/islands.geojson", driver="GeoJSON")
+            islands.to_file(f"{island_output_path}/island.geojson", driver="GeoJSON")
         else:
-            islands.to_csv(f"{island_output_path}/islands.tsv", sep="\t")
+            islands.to_csv(f"{island_output_path}/island.tsv", sep="\t", index=False)
 
     remove_id_list = []
     rings = geopandas.GeoDataFrame(relation_result, geometry="POLYGON_STR")
@@ -329,5 +320,5 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, debuggi
     if DEBUGGING:
         rings.to_file(f"{output_path}/{mode}.geojson", driver="GeoJSON")
     else:
-        rings.to_csv(f"{output_path}/{mode}.tsv", sep="\t")
+        rings.to_csv(f"{output_path}/{mode}.tsv", sep="\t", index=False)
     logging.info("rings process completed.")

@@ -8,33 +8,36 @@ import osmium
 import pandas
 from copy import deepcopy
 from shapely import wkt
-from src.enum.hofntype import HofnType
+from src.enum.hofn_type import HofnType
 from src.util.limit_area import get_limit_relation_geom, get_relation_polygon_with_overpy
-from util.merging_utils import lonlat_length_in_km, prepare_data, get_merged_and_divided_by_threshold, read_file_and_rename_geometry, merge_with_candidates, merge_with_candidates_dict, filter_small_island
+from src.util.merging_utils import lonlat_length_in_km, prepare_data, get_merged_and_divided_by_threshold, read_file_and_rename_geometry, merge_with_candidates, merge_with_candidates_dict, \
+    filter_small_island
 
 # %%
 wkt_factory = osmium.geom.WKTFactory()
 
 
 class LineHandler(osmium.SimpleHandler):
-    def __init__(self, tags, mode):
+    def __init__(self, tags, mode, level=None):
         super().__init__()
         self.lines = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'POLYGON_STR': [], "HOFN_TYPE": [], "ROAD_LEVEL": []}
         self.tags = tags
         self.mode = mode
+        self.level = level
 
     def way(self, w):
         line_id = w.id
         line_name = w.tags.get("name") if w.tags.get("name") else "UNKNOWN"
         if any([w.tags.get(key) == value for key, value in self.tags.items()]):
             line = wkt.loads(wkt_factory.create_linestring(w))
-            try:
-                self.append_line_attribute(self.lines, line_id, line_name, line)
-            except Exception as e:
-                traceback.print_exc()
+            level = self.level.get(w.tags.get(self.mode), False) if self.level else 0  # For level-need way
+            if level is not False:
+                try:
+                    self.append_line_attribute(self.lines, line_id, line_name, line, level)
+                except Exception as e:
+                    traceback.print_exc()
 
-    def append_line_attribute(self, attributes: dict, line_id: str, name, geometry):
-        # http://redmine.ghtinc.com/projects/chtcovms/wiki/Landusage
+    def append_line_attribute(self, attributes: dict, line_id: str, name, geometry, level):
         attributes["POLYGON_ID"].append(line_id)
         attributes["POLYGON_NAME"].append(name)
         attributes["POLYGON_STR"].append(geometry)
@@ -61,7 +64,7 @@ def main(input_path, output_path, nation, limit_relation_id, divide, mode, tags,
     line_handler = LineHandler(tags, mode)
     line_handler.apply_file(input_path, idx="flex_mem", locations=True)
     line_df = geopandas.GeoDataFrame(line_handler.lines, geometry="POLYGON_STR")
-    line_df.to_file(f"{output_path}/unmerged.geojson", driver="GeoJSON")
+    line_df.to_file(f"{output_path}/unmerged.geojson", driver="GeoJSON", encoding="utf-8")
 
     # 2. Merge all line
     logging.info("[2/3] Merge all the line.")
@@ -118,9 +121,9 @@ def main(input_path, output_path, nation, limit_relation_id, divide, mode, tags,
 
     merged.set_geometry(col="POLYGON_STR", inplace=True)
     if DEBUGGING:
-        merged.to_file(f"{output_path}/{mode}.geojson", driver="GeoJSON")
+        merged.to_file(f"{output_path}/{mode}.geojson", driver="GeoJSON", encoding="utf-8")
     else:
-        merged.to_csv(f"{output_path}/{mode}.tsv", sep="\t")
+        merged.to_csv(f"{output_path}/{mode}.tsv", sep="\t", index=False)
 
     if DEBUGGING is not True:
         try:
