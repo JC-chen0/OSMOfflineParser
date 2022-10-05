@@ -13,7 +13,10 @@ from shapely import wkt
 from shapely.geometry import LineString, Polygon
 from shapely.ops import polygonize, linemerge
 from datetime import date
-from util.merging_utils import is_reverse_needed, reverse_linestring_coords, is_continuous, prepare_data, get_relation_polygon
+
+from src.enum.mcc import National
+from src.util.limit_area import get_relation_polygon_with_overpy
+from src.util.merging_utils import is_reverse_needed, reverse_linestring_coords, is_continuous, prepare_data
 from src.enum.hofntype import HofnType
 
 # https://stackoverflow.com/questions/20625582/how-to-deal-with-settingwithcopywarning-in-pandas
@@ -26,9 +29,9 @@ class RingHandler(osmium.SimpleHandler):
     def __init__(self, tags, mode):
         super().__init__()
         # from way
-        self.way_rings = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'POLYGON_STR': [], 'HOFN_TYPE': [], 'HOFN_LEVEL': []}
+        self.way_rings = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'POLYGON_STR': [], 'HOFN_TYPE': [], 'ROAD_LEVEL': []}
         # from rel
-        self.rel_rings = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'POLYGON_STR': [], 'HOFN_TYPE': [], 'HOFN_LEVEL': []}
+        self.rel_rings = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'POLYGON_STR': [], 'HOFN_TYPE': [], 'ROAD_LEVEL': []}
 
         self.relation_dict: Dict[List[Dict]] = dict()  # RelationID: [{ID,ROLE,TYPE}]
         self.way_dict: Dict[Dict] = dict()
@@ -56,7 +59,7 @@ class RingHandler(osmium.SimpleHandler):
         rings.get("POLYGON_NAME").append(name)
         rings.get("POLYGON_STR").append(geometry)
         rings.get("HOFN_TYPE").append(HofnType[self.mode].value)
-        rings.get("HOFN_LEVEL").append("1")
+        rings.get("ROAD_LEVEL").append("0")
 
     def relation(self, relation):
         if any([relation.tags.get(key) == value for key, value in self.tags.items()]):
@@ -116,11 +119,11 @@ def inners_extracting(inners: List[Dict], islands: List[Dict]):
                   "POLYGON_NAME": inner.get("POLYGON_NAME"),
                   "POLYGON_STR": inner.get("POLYGON_STR"),
                   "HOFN_TYPE": "5",
-                  "HOFN_LEVEL": "1"}
+                  "ROAD_LEVEL": "0"}
         islands.append(append)
 
 
-def get_merged_rings(rings: list, polygon_id_used_table: list) -> List[Dict]:
+def get_merged_rings(rings: list, polygon_id_used_table: list, mode) -> List[Dict]:
     ############ INLINE FUNCTION ########
     def get_merged_line(ring, merging_candidates: list, merged_way_ids: list) -> LineString:
         merging_line = ring.get("GEOMETRY")
@@ -166,8 +169,9 @@ def get_merged_rings(rings: list, polygon_id_used_table: list) -> List[Dict]:
             # Choose way_id from merged line.
             for merged_id in merged_way_ids:
                 if merged_id not in polygon_id_used_table:
-                    result.append({'POLYGON_ID': merged_id, "POLYGON_NAME": ring.get("NAME"), "POLYGON_STR": merged_line, "HOFN_TYPE": 1, "HOFN_LEVEL": 1})
+                    result.append({'POLYGON_ID': merged_id, "POLYGON_NAME": ring.get("NAME"), "POLYGON_STR": merged_line, "HOFN_TYPE": HofnType[mode].value, "ROAD_LEVEL": 0})
                     polygon_id_used_table.append(merged_id)
+                    break
     return result
 
 
@@ -176,51 +180,71 @@ def polygonize_with_try_catch(row, remove_list):
         return Polygon(row["POLYGON_STR"])
     except:
         logging.debug(f"{row['POLYGON_ID']} cannot be polygonized, geometry is {row['POLYGON_STR']}, return origin LINESTRING instead")
-        remove_id_list.append(row['POLYGON_ID'])
+        remove_list.append(row['POLYGON_ID'])
         return row["POLYGON_STR"]
 
 
-if __name__ == "__main__":
-    parser = ArgumentParser()
-    parser.add_argument("input", type=str, help="Input osm.pbf file path.")
-    parser.add_argument("output", type=str, help="Output geojson file path.")
-    parser.add_argument("limit_relation", type=str, help="Relation id of limit area.")
-    parser.add_argument("--mode", type=str, help="Process mode, Output file name")
-    parser.add_argument("--tags", type=str, help="format: tag_name1 search_value1 tag_name2 search_value2 ...", nargs="+")
+def remove_within_outer(rings: geopandas.GeoDataFrame) -> geopandas.GeoDataFrame:
+    def is_within(row, compare: geopandas.GeoSeries, current_index):
+        polygons = compare.drop(current_index)
+        within = polygons.contains(row["geometry"])
+        if True in list(within):
+            print(f"{row['POLYGON_ID']} will be removed due to within other polygon.")
+            return 1
+        return 0
 
-    args = parser.parse_args()
-    input_path = args.input
-    output_path = args.output
-    limit_relation_id = args.limit_relation
-    mode = args.mode
-    tags = {}
-    tmp = 0
-    while tmp < len(args.tags) - 1:
-        tag = args.tags[tmp]
-        value = args.tags[tmp + 1]
-        tags[args.tags[tmp]] = args.tags[tmp + 1]
-        tmp += 2
+    start_time = time.time()
+    compare = rings["geometry"]
+    for index, row in rings.iterrows():
+        rings.at[index, "within"] = is_within(row, compare, index)
+    extract = rings[rings["within"] != 1]
+    logging.debug(f"remove within outer, taking {time.time() - start_time}")
+    del extract["within"]
+    return extract
 
-    # 1. Get rings data from osm.pbf file
-    try:
-        with open('src/resource/logback.yaml', 'r') as stream:
-            config = yaml.safe_load(stream)
-            config.get("handlers").get("info_file_handler")["filename"] = f"logs/{mode}/{limit_relation_id}-{date.today()}.info"
-            config.get("handlers").get("debug_file_handler")["filename"] = f"logs/{mode}/{limit_relation_id}-{date.today()}.debug"
-            logging.config.dictConfig(config)
-            stream.close()
-    except Exception as e:
-        logging.basicConfig(level=logging.DEBUG)
-        traceback.print_exc()
-        logging.debug("Error in Logging Configuration, Using default configs")
 
+def remove_over_intersection_outer(rings: geopandas.GeoDataFrame) -> geopandas.GeoDataFrame:
+    def is_over_intersect(row, compare: geopandas.GeoSeries, current_index):
+        geometry = row["geometry"]
+        polygons = compare.drop(current_index)
+        intersects = polygons.intersects(geometry)
+        if True in list(intersects):
+            true_indexes = [i for i, x in intersects.iteritems() if x]
+            for index in true_indexes:
+                intersect_polygon = geometry.difference(polygons[index])
+                cover_percentage = (intersect_polygon.area / geometry.area) * 100
+                if cover_percentage < 3:
+                    print(f"{row['POLYGON_ID']} will be removed due to over_intersection")
+                    return 1
+        return 0
+
+    start_time = time.time()
+    compare = rings["geometry"]
+    rings["over_intersect"] = 0
+    for index, row in rings.iterrows():
+        rings.at[index, "over_intersect"] = is_over_intersect(row, compare, index)
+    extract = rings[rings["over_intersect"] != 1]
+    del extract["over_intersect"]
+    print(f"remove within outer, taking {time.time() - start_time}")
+    return extract
+
+
+# %%
+def main(input_path, output_path, nation, limit_relation_id, mode, tags, debugging=False):
+    DEBUGGING = debugging
+    IS_VILLAGE = True if mode == "village" else False
+    IS_WATER = True if mode == "water" else False
+    island_output_path = f"data/output/island/{nation}"
+    if os.path.isdir(island_output_path):
+        os.makedirs(island_output_path)
+
+    # 1. Get coastlines data from osm.pbf file
     logging.info("============================================")
-    logging.info(f"WORKING DIRECTORY: {os.getcwd()}")
-    logging.info(f"INPUT ARGUMENTS: {args}")
+    logging.info(f"MODE: {mode}")
     logging.info(f"INPUT FILE PATH: {input_path}")
     logging.info(f"OUTPUT FILE PATH: {output_path}")
+    logging.info(f"PROCESSING NATION: {nation}")
     logging.info(f"RELATION ID OF LIMIT AREA: {limit_relation_id}")
-    logging.info(f"MODE: {mode}")
     logging.info(f"SEARCH TAG WITH VALUE: {tags}")
     logging.info("============================================")
 
@@ -228,7 +252,7 @@ if __name__ == "__main__":
     logging.info(f"[1/4] Loading data from {input_path}, tags: {tags}")
 
     start_time = time.time()
-    area_handler = RingHandler(tags,mode)
+    area_handler = RingHandler(tags, mode)
     area_handler.apply_file(input_path, idx="flex_mem", locations=True)
     logging.debug(f"Get data completed, taking {time.time() - start_time} seconds")
 
@@ -239,7 +263,7 @@ if __name__ == "__main__":
     way_rings = geopandas.GeoDataFrame(area_handler.way_rings, geometry="POLYGON_STR")
     rel_rings = geopandas.GeoDataFrame(area_handler.rel_rings, geometry="POLYGON_STR")
     # Prepare data and free memory
-    limit_area = get_relation_polygon(limit_relation_id)
+    limit_area = get_relation_polygon_with_overpy(limit_relation_id)
     way_rings = prepare_data(way_rings, limit_area.wkt, "POLYGON_STR")
     rel_rings = prepare_data(rel_rings, limit_area.wkt, "POLYGON_STR")
 
@@ -262,28 +286,34 @@ if __name__ == "__main__":
         logging.debug(f"Relation: {relation_id} doing merge.")
         outers = relation.get("outer")
         if outers:
-            outers = get_merged_rings(outers, polygon_id_used_table)
+            outers = get_merged_rings(outers, polygon_id_used_table,mode)
             relation_member_dict[relation_id] = outers
             for outer in outers:
                 relation_result.append(outer)
-        inners = relation.get("inner")
-        if inners:
-            inners = get_merged_rings(inners, polygon_id_used_table)
-            inners_extracting(inners, islands)
+
+        if IS_WATER:
+            inners = relation.get("inner")
+            if inners:
+                inners = get_merged_rings(inners, polygon_id_used_table, "island")
+                inners_extracting(inners, islands)
 
         logging.debug("outer and inner merge process completed.")
 
     # 4. polygonized data and output.
 
     logging.info("[4/4] Polygonizing data and output.")
-    if mode == "ring":
+    if IS_WATER:
         remove_id_list = []
         islands = geopandas.GeoDataFrame(islands, geometry="POLYGON_STR")
         islands["POLYGON_STR"] = islands.apply(lambda row: polygonize_with_try_catch(row, remove_id_list), axis=1)
         islands = islands[~islands.POLYGON_ID.isin(remove_id_list)]
         logging.debug(f"Remove {remove_id_list}  due to unpolygonizable issue.")
         logging.debug("islands polygonized done")
-        islands.to_file(f"{output_path}\\islands.geojson", driver="GeoJSON")
+
+        if DEBUGGING:
+            islands.to_file(f"{island_output_path}/islands.geojson", driver="GeoJSON")
+        else:
+            islands.to_csv(f"{island_output_path}/islands.tsv", sep="\t")
 
     remove_id_list = []
     rings = geopandas.GeoDataFrame(relation_result, geometry="POLYGON_STR")
@@ -292,5 +322,12 @@ if __name__ == "__main__":
     rings = rings[~rings["POLYGON_ID"].isin(remove_id_list)]
     logging.debug(f"Remove {remove_id_list}  due to unpolygonizable issue.")
     logging.debug("rings polygonized done.")
-    rings.to_file(f"{output_path}\\{mode}.geojson", driver="GeoJSON")
+    if IS_VILLAGE:
+        rings = remove_within_outer(rings)
+        rings = remove_over_intersection_outer(rings)
+
+    if DEBUGGING:
+        rings.to_file(f"{output_path}/{mode}.geojson", driver="GeoJSON")
+    else:
+        rings.to_csv(f"{output_path}/{mode}.tsv", sep="\t")
     logging.info("rings process completed.")

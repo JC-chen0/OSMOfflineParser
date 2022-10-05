@@ -14,10 +14,12 @@ class HofnType(Enum):
     indoor_building_not_osm = 9.1
     ship_road = 10
     village = 11
-    cable_car = 12
     forest = 13
     field = 13
     railway = 14
+    cable_car = 15
 
     def __init__(self,hofn_type):
         self.hofn_type = hofn_type
+
+

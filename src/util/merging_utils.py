@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Dict
 from geopandas import GeoDataFrame
 from shapely import wkt
-from shapely.ops import linemerge
+from shapely.ops import linemerge, polygonize
 
 
 def reverse_linestring_coords(geometry):
@@ -29,35 +29,38 @@ def lonlat_length_in_km(geom):
     return geom.length * 6371 * math.pi / 180
 
 
-def merge_with_candidates_dict(row,unmerged_ids,unmerged,candidates: dict):
+def merge_with_candidates_dict(row, unmerged_ids, result, candidates: dict):
     # row, unmerged_ids: do traversal and merge
     # unmerged: final merged result
     # candidates: merging candidate
-
     logging.debug(f"{row['POLYGON_ID']} start merging.")
     candidates_ids = list(candidates.keys())
     candidates_values = list(candidates.values())
-
+    current_merging = row["POLYGON_STR"]
     # Use reverse traversal to remove merged id
     i = len(candidates) - 1
     while i >= 0:
         candidate_id = candidates_ids[i]
         candidate_value = candidates_values[i]
         candidate_geometry = candidate_value["POLYGON_STR"]
-        if is_reverse_needed(row["POLYGON_STR"], candidate_geometry):
+        if is_reverse_needed(current_merging, candidate_geometry):
             reverse_linestring_coords(candidate_geometry)
             logging.debug(f"{candidate_id} reversed.")
-        if is_continuous(row["POLYGON_STR"], candidate_geometry):
-            unmerged[row["POLYGON_ID"]]["POLYGON_STR"] = linemerge([row["POLYGON_STR"], candidate_geometry])
+        if is_continuous(current_merging, candidate_geometry):
+            current_merging = linemerge([current_merging, candidate_geometry])
+            result[row["POLYGON_ID"]]["POLYGON_STR"] = current_merging
             logging.debug(f"{row['POLYGON_ID']} merge with {candidate_id}")
-
+            # Candidate has been merged.
             candidates_ids.remove(candidate_id)
             candidates_values.remove(candidate_value)
-            unmerged_ids.remove(candidate_id)
-            unmerged.pop(candidate_id)
             candidates.pop(candidate_id)
+
+            unmerged_ids.remove(candidate_id)
+            result.pop(candidate_id)
+
             i = len(candidates_ids) - 1
-        i -= 1
+        else:
+            i -= 1
     return row
 
 
@@ -68,6 +71,8 @@ def merge_with_candidates(row, candidates: dict, processed_ids: list):
     if row["POLYGON_ID"] in candidates.keys():
         candidates.pop(row["POLYGON_ID"])
 
+    if row["POLYGON_ID"] == 1078983773:
+        print("hi")
     logging.debug(f"{row['POLYGON_ID']} start merging.")
 
     i = len(candidates) - 1
@@ -93,6 +98,7 @@ def merge_with_candidates(row, candidates: dict, processed_ids: list):
     return row
 
     ####################################################################################
+
 
 def get_merged_and_divided_by_threshold(geometry_dict, tolerance, length_threshold) -> Dict:
     compare_geometry_dict = deepcopy(geometry_dict)
@@ -146,6 +152,7 @@ def get_merged_and_divided_by_threshold(geometry_dict, tolerance, length_thresho
     logging.debug(f"Re-merge and dividing completed.")
     return compare_geometry_dict
 
+
 def prepare_data(data_df: GeoDataFrame, intersection_polygon_wkt: str, geometry_column: str) -> GeoDataFrame:
     geometries = data_df[geometry_column]
     polygon = wkt.loads(intersection_polygon_wkt)
@@ -159,3 +166,18 @@ def read_file_and_rename_geometry(file_path: str):
     tmp = geopandas.read_file(file_path)
     tmp.rename_geometry("POLYGON_STR", inplace=True)
     return tmp
+
+
+def filter_small_island(merged: dict, area_threshold: int):
+    #  filter the small island, where there is no people
+    filtered = merged
+    small_island_list = []
+    for key, values in merged.items():
+        try:
+            geometry = values["POLYGON_STR"]
+            if list(polygonize(geometry))[0].area * 6371000 * math.pi / 180 * 6371000 * math.pi / 180 < area_threshold:
+                small_island_list.append(key)
+        except:
+            logging.debug(f"POLYGON_ID: {key} cannot be polygonized.")
+    [filtered.pop(key) for key in small_island_list]
+    return filtered
