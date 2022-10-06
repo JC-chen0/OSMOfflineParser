@@ -1,3 +1,4 @@
+import math
 import os
 import time
 import osmium
@@ -13,10 +14,10 @@ from shapely import wkt
 from shapely.geometry import LineString, Polygon
 from shapely.ops import polygonize, linemerge
 from datetime import date
-
+import area
 from src.enum.mcc import National
 from src.util.limit_area import get_relation_polygon_with_overpy
-from src.util.merging_utils import is_reverse_needed, reverse_linestring_coords, is_continuous, prepare_data
+from src.util.merging_utils import is_reverse_needed, reverse_linestring_coords, is_continuous, prepare_data, linemerge_by_wkt
 from src.enum.hofn_type import HofnType
 
 # https://stackoverflow.com/questions/20625582/how-to-deal-with-settingwithcopywarning-in-pandas
@@ -40,7 +41,7 @@ class RingHandler(osmium.SimpleHandler):
 
     def area(self, area):
         try:
-            if any([area.tags.get(key) == value for key, value in self.tags.items()]):
+            if any([area.tags.get(key) in value if type(value) == list else area.tags.get(key) == value for key, value in self.tags.items()]):
                 ring_id = area.orig_id()
                 ring_name = area.tags.get("name")  # create new string object
                 ring_geometry = wkt.loads(wktfab.create_multipolygon(area))
@@ -77,6 +78,8 @@ def get_relation_member_data(relation_dict: Dict, way_dict: Dict) -> Dict:
     ring_rel_members_dict = {"RELATION_ID": [], "WAY_ID": [], "NAME": [], "GEOMETRY": [], "ROLE": [], "TYPE": []}
 
     for relation_id, members in relation_dict.items():
+        if relation_id in [4152133]:
+            print("")
         for member in members:
             if member.get("ROLE") not in ["inner", "outer"]:
                 continue
@@ -99,6 +102,8 @@ def restructure(relation_member_dict):
     temp = dict()
     for member in relation_member_dict.values():
         relation_id = member.get("RELATION_ID")
+        if relation_id == 4152133:
+            print("")
         member.pop("RELATION_ID")
         if not temp.get(relation_id, 0):
             temp[relation_id] = {"outer": [], "inner": []}
@@ -123,9 +128,9 @@ def inners_extracting(inners: List[Dict], islands: List[Dict]):
         islands.append(append)
 
 
-def get_merged_rings(rings: list, polygon_id_used_table: list, mode) -> List[Dict]:
+def get_merged_rings(rings: list, polygon_id_used_table: list, merged_way_ids, mode) -> List[Dict]:
     ############ INLINE FUNCTION ########
-    def get_merged_line(ring, merging_candidates: list, merged_way_ids: list) -> LineString:
+    def get_merged_line(ring, merging_candidates: list, merged_way_ids: list, current_merged_ids) -> LineString:
         merging_line = ring.get("GEOMETRY")
         candidate_line = NotImplemented
         merging_index = 0
@@ -144,7 +149,8 @@ def get_merged_rings(rings: list, polygon_id_used_table: list, mode) -> List[Dic
                 elif is_continuous(merging_line, candidate_line):
                     logging.debug(f"{ring.get('WAY_ID')} merge with {candidate_id}")
                     # merge and start new round of iteration.
-                    merging_line = linemerge([merging_line, candidate_line])
+                    merging_line = linemerge_by_wkt(merging_line, candidate_line)
+                    current_merged_ids.append(candidate_id)
                     merged_way_ids.append(candidate_id)
                     merging_index = 0
                 else:
@@ -155,23 +161,25 @@ def get_merged_rings(rings: list, polygon_id_used_table: list, mode) -> List[Dic
     #################################################################################
     # Deep copy with merge candidate.
     merging_candidate = [ring for ring in rings]
-    # List[Index] to skip those have been merged
-    merged_way_ids = []
     result = []
     for ring in rings:
+        current_merged_ids = []
         if ring.get('WAY_ID') not in merged_way_ids:
             logging.debug(f"WAY:{ring.get('WAY_ID')} start doing merge.")
             # Avoid merge with self.
             merged_way_ids.append(ring.get('WAY_ID'))
             # Get merged line with current ring.
-            merged_line = get_merged_line(ring, merging_candidate, merged_way_ids)
+            current_merged_ids.append(ring.get('WAY_ID'))
+            merged_line = get_merged_line(ring, merging_candidate, merged_way_ids, current_merged_ids)
 
             # Choose way_id from merged line.
-            for merged_id in merged_way_ids:
+            for merged_id in current_merged_ids:
                 if merged_id not in polygon_id_used_table:
                     result.append({'POLYGON_ID': merged_id, "POLYGON_NAME": ring.get("NAME"), "POLYGON_STR": merged_line, "HOFN_TYPE": HofnType[mode].value, "ROAD_LEVEL": 0})
                     polygon_id_used_table.append(merged_id)
                     break
+                else:
+                    logging.debug(f"{merged_id} has been used, change another polygon id")
     return result
 
 
@@ -186,45 +194,53 @@ def polygonize_with_try_catch(row, remove_list):
 
 def remove_within_outer(rings: geopandas.GeoDataFrame) -> geopandas.GeoDataFrame:
     def is_within(row, compare: geopandas.GeoSeries, current_index):
-        polygons = compare.drop(current_index)
-        within = polygons.contains(row["geometry"])
-        if True in list(within):
-            print(f"{row['POLYGON_ID']} will be removed due to within other polygon.")
-            return 1
-        return 0
+        try:
+            polygons = compare.drop(current_index)
+            within = polygons.contains(row["POLYGON_STR"])
+            if True in list(within):
+                logging.debug(f"{row['POLYGON_ID']} will be removed due to within other polygon.")
+                return 1
+            return 0
+        except:
+            logging.debug(f"{row['POLYGON_ID']} cannot do contains.")
+            traceback.print_exc()
 
     start_time = time.time()
-    compare = rings["geometry"]
+    compare = rings["POLYGON_STR"]
     for index, row in rings.iterrows():
         rings.at[index, "within"] = is_within(row, compare, index)
     extract = rings[rings["within"] != 1]
     logging.debug(f"remove within outer, taking {time.time() - start_time}")
-    del extract["within"]
+    extract = extract.drop(columns=["within"])
     return extract
 
 
 def remove_over_intersection_outer(rings: geopandas.GeoDataFrame) -> geopandas.GeoDataFrame:
     def is_over_intersect(row, compare: geopandas.GeoSeries, current_index):
-        geometry = row["geometry"]
-        polygons = compare.drop(current_index)
-        intersects = polygons.intersects(geometry)
-        if True in list(intersects):
-            true_indexes = [i for i, x in intersects.iteritems() if x]
-            for index in true_indexes:
-                intersect_polygon = geometry.difference(polygons[index])
-                cover_percentage = (intersect_polygon.area / geometry.area) * 100
-                if cover_percentage < 3:
-                    print(f"{row['POLYGON_ID']} will be removed due to over_intersection")
-                    return 1
-        return 0
+        try:
+            geometry = row["POLYGON_STR"]
+            polygons = compare.drop(current_index)
+            intersects = polygons.intersects(geometry)
+            if True in list(intersects):
+                true_indexes = [i for i, x in intersects.iteritems() if x]
+                for index in true_indexes:
+                    intersect_polygon = geometry.difference(polygons[index])
+                    cover_percentage = (intersect_polygon.area / geometry.area) * 100
+                    if cover_percentage < 3:
+                        print(f"{row['POLYGON_ID']} will be removed due to over_intersection")
+                        return 1
+            return 0
+        except:
+            logging.debug(f"{row['POLYGON_ID']} cannot do intersect.")
+            traceback.print_exc()
 
     start_time = time.time()
-    compare = rings["geometry"]
+    compare = rings["POLYGON_STR"]
     rings["over_intersect"] = 0
     for index, row in rings.iterrows():
         rings.at[index, "over_intersect"] = is_over_intersect(row, compare, index)
     extract = rings[rings["over_intersect"] != 1]
-    del extract["over_intersect"]
+    extract = extract.drop(columns=["over_intersect"])
     print(f"remove within outer, taking {time.time() - start_time}")
     return extract
 
@@ -253,6 +269,7 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, debuggi
     way_dict = area_handler.way_dict
     way_rings = geopandas.GeoDataFrame(area_handler.way_rings, geometry="POLYGON_STR")
     rel_rings = geopandas.GeoDataFrame(area_handler.rel_rings, geometry="POLYGON_STR")
+
     # Prepare data and free memory
     limit_area = get_relation_polygon_with_overpy(limit_relation_id)
     way_rings = prepare_data(way_rings, limit_area.wkt, "POLYGON_STR")
@@ -273,11 +290,15 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, debuggi
     # Results with rings and islands
     relation_result = []
     islands = []
+    # List[Index] to skip those have been merged
+    merged_way_ids = []
     for relation_id, relation in relation_member_dict.items():
         logging.debug(f"Relation: {relation_id} doing merge.")
         outers = relation.get("outer")
+        if relation_id == 4152133:
+            print("")
         if outers:
-            outers = get_merged_rings(outers, polygon_id_used_table,mode)
+            outers = get_merged_rings(outers, polygon_id_used_table, merged_way_ids, mode)
             relation_member_dict[relation_id] = outers
             for outer in outers:
                 relation_result.append(outer)
@@ -285,7 +306,7 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, debuggi
         if IS_WATER:
             inners = relation.get("inner")
             if inners:
-                inners = get_merged_rings(inners, polygon_id_used_table, "island")
+                inners = get_merged_rings(inners, polygon_id_used_table, merged_way_ids, "island")
                 inners_extracting(inners, islands)
 
         logging.debug("outer and inner merge process completed.")
@@ -300,7 +321,7 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, debuggi
         islands = islands[~islands.POLYGON_ID.isin(remove_id_list)]
         logging.debug(f"Remove {remove_id_list}  due to unpolygonizable issue.")
         logging.debug("islands polygonized done")
-
+        islands = islands.drop(islands[islands.POLYGON_STR.area * 6371000 * math.pi / 180 * 6371000 * math.pi / 180 < 200 * 200].index)
         if DEBUGGING:
             islands.to_file(f"{island_output_path}/island.geojson", driver="GeoJSON")
         else:
@@ -313,9 +334,10 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, debuggi
     rings = rings[~rings["POLYGON_ID"].isin(remove_id_list)]
     logging.debug(f"Remove {remove_id_list}  due to unpolygonizable issue.")
     logging.debug("rings polygonized done.")
-    if IS_VILLAGE:
-        rings = remove_within_outer(rings)
-        rings = remove_over_intersection_outer(rings)
+    rings = rings.drop(rings[rings.POLYGON_STR.area * 6371000 * math.pi / 180 * 6371000 * math.pi / 180 < 200 * 200].index)
+    # if IS_VILLAGE:
+    #     rings = remove_within_outer(rings)
+    #     rings = remove_over_intersection_outer(rings)
 
     if DEBUGGING:
         rings.to_file(f"{output_path}/{mode}.geojson", driver="GeoJSON")

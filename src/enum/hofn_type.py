@@ -2,15 +2,15 @@ from enum import Enum
 
 
 class HofnType(Enum):
-    water = "1"
-    coastline = "2"
-    underground_mrt = "3"
-    bridge = "4"
-    island = "5"
-    tunnel = "6"
-    highway = "7"
-    highway_in_desert = "8"
-    indoor_building = "9"
+    water = "01"
+    coastline = "02"
+    underground_mrt = "03"
+    bridge = "04"
+    island = "05"
+    tunnel = "06"
+    highway = "07"
+    highway_in_desert = "08"
+    indoor_building = "09"
     indoor_building_not_osm = 9.1
     ship_road = "10"
     village = "11"

@@ -3,7 +3,7 @@ disable_existing_loggers: True
 file_path: \\logs\\
 formatters:
     default:
-            format: "%(asctime)s - [%(module)s] - [%(funcName)s] - [%(lineno)s] - [%(levelname)s] - %(message)s"
+            format: "%(asctime)s - [%(module)s] - [%(levelname)s] - %(message)s"
 loggers:
     default:
       level: DEBUG

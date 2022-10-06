@@ -16,38 +16,42 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("input", type=str, help="Input osm.pbf file path.")
     parser.add_argument("nation", type=str, help="Nation name.")
+    parser.add_argument("mode", type=str, help="Process mode, Output file name")
     parser.add_argument("--limit_relation_id", type=str, help="If set, limit relation id will be changed from nation to id set.")
     parser.add_argument("--divide", const=True, default=False, nargs="?")  # Set as a flag
-    parser.add_argument("--mode", type=str, help="Process mode, Output file name")
-
+    parser.add_argument("--tags", type=str, help="format: tag_name1 search_value1 tag_name2 search_value2 ...", nargs="+")
+    parser.add_argument("--debug", const=True, default=False, nargs="?")  # Set as a flag
     args = parser.parse_args()
     input_path = args.input
     nation = args.nation
     limit_relation_id = args.limit_relation_id if args.limit_relation_id else National[nation].get_relation_id()
-    divide = args.divide
+    divide = True if args.divide else False
     mode = args.mode
     output_path = f"data/output/{mode}/{nation}"
     if os.path.isdir(output_path) is not True:
         os.makedirs(output_path)
-    tags = Tag[mode].value
+
     # Grouping tags
-    # tags = {}
-    # tmp = 0
-    # while tmp < len(args.tags) - 1:
-    #     tag = args.tags[tmp]
-    #     value = args.tags[tmp + 1]
-    #     tags[args.tags[tmp]] = args.tags[tmp + 1]
-    #     tmp += 2
+    if args.tags:
+        tags = {}
+        tmp = 0
+        while tmp < len(args.tags) - 1:
+            tag = args.tags[tmp]
+            value = args.tags[tmp + 1]
+            tags[args.tags[tmp]] = args.tags[tmp + 1]
+            tmp += 2
+    else:
+        tags = Tag[mode].value  # default value
 
     # config
-    DEBUGGING = False
+    DEBUGGING = True if args.debug else False
     # mode
     rings_mode = ["water", "village"]
     lines_mode = ["coastline", "highway"]
 
     # road level
-    highways_type = ["motorway", "trunk", "primary", "secondary", "tertiary"]
-    highways_level = dict(zip(highways_type, [1, 2, 3, 4, 5]))
+    highways_type = ["motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential"]
+    highways_level = dict(zip(highways_type, [1, 2, 3, 4, 5, 6, 7]))
 
     try:
         with open('src/resource/logback.yaml', 'r') as stream:
@@ -71,9 +75,13 @@ if __name__ == "__main__":
     logging.info(f"RELATION ID OF LIMIT AREA: {limit_relation_id}")
     logging.info(f"SEARCH TAG WITH VALUE: {tags}")
     logging.info(f"REMERGE AND DIVIDE: {divide}") if divide else True
+    logging.info(f"DEBUGGING: {DEBUGGING}") if DEBUGGING else True
     logging.info("============================================")
 
     if mode in rings_mode:
-        rings.main(input_path, output_path, nation, limit_relation_id, mode, tags)
+        rings.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, mode=mode, tags=tags, debugging=DEBUGGING)
     elif mode in lines_mode:
-        lines.main(input_path, output_path, nation, limit_relation_id, divide, mode, tags)
+        if mode == "highway":
+            lines.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, divide=divide, mode=mode, tags=tags, level=highways_level, debugging=DEBUGGING)
+        else:
+            lines.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, divide=divide, mode=mode, tags=tags, debugging=DEBUGGING)
