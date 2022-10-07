@@ -12,7 +12,8 @@ class HofnType(Enum):
     highway_in_desert = "08"
     indoor_building = "09"
     indoor_building_not_osm = 9.1
-    ship_road = "10"
+    # ship_road = "10"
+    ferry = "10"
     village = "11"
     forest = "13"
     field = "13"

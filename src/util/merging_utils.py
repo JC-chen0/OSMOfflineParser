@@ -1,38 +1,34 @@
 import logging
 import math
 import traceback
-
-import geopandas
 from copy import deepcopy
 from typing import Dict
-from geopandas import GeoDataFrame
-from shapely import wkt
+
+import geopandas
+import pandas
 from shapely.geometry import LineString
 from shapely.ops import linemerge, polygonize
 
+from src.util.limit_area import prepare_data
+from src.util.read_data import read_file_and_rename_geometry
+
 
 def reverse_linestring_coords(geometry):
-    geometry.coords = list(geometry.coords)[::-1]
+    reverse = geometry
+    reverse.coords = list(reverse.coords)[::-1]
+    return reverse
 
 
 def is_continuous(line1, line2):
-    try:
-        head, tail = line1.coords[0], line1.coords[-1]
-        compare_head, compare_tail = line2.coords[0], line2.coords[-1]
-        return head == compare_tail or tail == compare_head
-    except:
-        traceback.print_exc()
-        logging.debug(f"Facing problem when checking continous, Line1: {line1}  Line2: {line2}")
+    head, tail = line1.coords[0], line1.coords[-1]
+    compare_head, compare_tail = line2.coords[0], line2.coords[-1]
+    return head == compare_tail or tail == compare_head
 
 
 def is_reverse_needed(line1, line2):
-    try:
-        head, tail = line1.coords[0], line1.coords[-1]
-        compare_head, compare_tail = line2.coords[0], line2.coords[-1]
-        return head == compare_head or tail == compare_tail
-    except:
-        traceback.print_exc()
-        logging.debug(f"Facing problem when checking reversed, Line1: {line1}  Line2: {line2}")
+    head, tail = line1.coords[0], line1.coords[-1]
+    compare_head, compare_tail = line2.coords[0], line2.coords[-1]
+    return head == compare_head or tail == compare_tail
 
 
 def lonlat_length_in_km(geom):
@@ -77,44 +73,10 @@ def merge_with_candidates_dict(row, unmerged_ids, result, candidates: dict):
             i -= 1
     return row
 
-
-def merge_with_candidates(row, candidates: dict, processed_ids: list):
-    if row["POLYGON_ID"] in processed_ids:
-        row["POLYGON_STR"] = None
-        return
-    if row["POLYGON_ID"] in candidates.keys():
-        candidates.pop(row["POLYGON_ID"])
-
-    if row["POLYGON_ID"] == 1078983773:
-        print("hi")
-    logging.debug(f"{row['POLYGON_ID']} start merging.")
-
-    i = len(candidates) - 1
-    candidates_ids = list(candidates.keys())
-    candidates_values = list(candidates.values())
-    while i >= 0:
-        candidate_id = candidates_ids[i]
-        candidate_value = candidates_values[i]
-        delete_id = None
-        candidate_geometry = candidate_value["POLYGON_STR"]
-        if is_reverse_needed(row["POLYGON_STR"], candidate_geometry):
-            reverse_linestring_coords(candidate_geometry)
-            logging.debug(f"{candidate_id} reversed.")
-        if is_continuous(row["POLYGON_STR"], candidate_geometry):
-            row["POLYGON_STR"] = linemerge_by_wkt(row["POLYGON_STR"], candidate_geometry)
-            processed_ids.append(candidate_id)
-
-            logging.debug(f"{row['POLYGON_ID']} merge with {candidate_id}")
-            candidates_ids.remove(candidate_id)
-            candidates_values.remove(candidate_value)
-            i = len(candidates_ids) - 1
-        i -= 1
-    return row
-
     ####################################################################################
 
 
-def get_merged_and_divided_by_threshold(geometry_dict,dividing_result_dict, tolerance, length_threshold) -> Dict:
+def get_merged_and_divided_by_threshold(geometry_dict, dividing_result_dict, tolerance, length_threshold) -> Dict:
     result_dict = dividing_result_dict
     compare_geometry_dict = deepcopy(geometry_dict)
     reach_length_limit_list = []
@@ -178,31 +140,18 @@ def get_merged_and_divided_by_threshold(geometry_dict,dividing_result_dict, tole
     return result_dict
 
 
-def prepare_data(data_df: GeoDataFrame, intersection_polygon_wkt: str, geometry_column: str) -> GeoDataFrame:
-    geometries = data_df[geometry_column]
-    polygon = wkt.loads(intersection_polygon_wkt)
-    data_df["in_polygon"] = geometries.intersects(polygon)
-    data_df = data_df[data_df["in_polygon"]]
-    del data_df["in_polygon"]
-    return data_df
+def linemerge_by_wkt(line1, line2) -> LineString:
+    if line1 == line2:
+        raise ValueError("Attempt to merge two equal linestring.")
 
-
-def linemerge_by_wkt(line1, line2):
     line1_coords = line1.coords[:]
     line2_coords = line2.coords[:]
     source, target = (line1, line2) if line1_coords[-1] == line2_coords[0] else (line2, line1)
-    if source and target:
-        coords = source.coords[:]
-        coords.pop(-1)
-        coords.extend(target.coords[:])
-        new_linestring = LineString(coords)
+    coords = source.coords[:]
+    coords.pop(-1)
+    coords.extend(target.coords[:])
+    new_linestring = LineString(coords)
     return new_linestring
-
-
-def read_file_and_rename_geometry(file_path: str):
-    tmp = geopandas.read_file(file_path)
-    tmp.rename_geometry("POLYGON_STR", inplace=True)
-    return tmp
 
 
 def filter_small_island(merged: dict, area_threshold: int):

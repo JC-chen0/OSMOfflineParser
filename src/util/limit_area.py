@@ -2,6 +2,7 @@ import logging
 from typing import Dict
 
 import overpy
+from geopandas import GeoDataFrame
 from shapely import wkt
 import osmium
 from shapely.geometry import Polygon, MultiPolygon, Point, LineString
@@ -59,3 +60,12 @@ def get_relation_polygon_with_overpy(rel_id: str) -> MultiPolygon:
     borders = unary_union(merged)
     polygons = MultiPolygon(list(polygonize(borders)))
     return polygons
+
+
+def prepare_data(data_df: GeoDataFrame, intersection_polygon_wkt: str, geometry_column: str) -> GeoDataFrame:
+    geometries = data_df[geometry_column]
+    polygon = wkt.loads(intersection_polygon_wkt)
+    data_df["in_polygon"] = geometries.intersects(polygon)
+    data_df = data_df[data_df["in_polygon"]]
+    del data_df["in_polygon"]
+    return data_df

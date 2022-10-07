@@ -19,6 +19,7 @@ if __name__ == "__main__":
             print(f"Round to {i} is invalid.")
         return 99
 
+
     parser = ArgumentParser()
     parser.add_argument("nation", type=str, help="Nation name.")
     parser.add_argument("--hofn_types", type=str, help="format: HofnType1 HofnType2 ...", nargs="+")
@@ -64,15 +65,16 @@ if __name__ == "__main__":
         print(f"{hofn_type} pass unique id validation")
         # 3.
         # TODO: FUNCTION TO DYNAMIC
-        # if hofn_type in ["01", "02", "05", "11"]:
-        #     valid_decimal_place = check_valid_round_precision(file)
-        #     file["POLYGON_STR"] = file.apply(lambda row: shapely.wkt.loads(shapely.wkt.dumps(row["POLYGON_STR"], rounding_precision=valid_decimal_place)), axis=1)
-        #     print(f"{hofn_type} rounding precision is {valid_decimal_place}")
-        # else:
-        #     file["POLYGON_STR"] = file.apply(lambda row: shapely.wkt.loads(shapely.wkt.dumps(row["POLYGON_STR"], rounding_precision=5)), axis=1)
-        #     print(f"{hofn_type} rounding precision is set to default {5}")
+        if hofn_type in ["01", "02", "05", "10", "11"]:
+            # valid_decimal_place = check_valid_round_precision(file)
+            # file["POLYGON_STR"] = file.apply(lambda row: shapely.wkt.loads(shapely.wkt.dumps(row["POLYGON_STR"], rounding_precision=valid_decimal_place)), axis=1)
+            # print(f"{hofn_type} rounding precision is {valid_decimal_place}")
+            pass
+        else:
+            file["POLYGON_STR"] = file.apply(lambda row: shapely.wkt.loads(shapely.wkt.dumps(row["POLYGON_STR"], rounding_precision=5)), axis=1)
+            print(f"{hofn_type} rounding precision is set to default {5}")
         # 4.
-        if hofn_type in ["01", "05", "11"]:
+        if hofn_type in ["01", "05", "10", "11"]:
             if not all(file["POLYGON_STR"].is_valid):
                 invalid = file.is_valid
                 print("=========================================")

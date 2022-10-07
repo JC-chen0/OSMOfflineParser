@@ -1,7 +1,7 @@
 import logging
 import os
 import traceback
-from datetime import date
+from datetime import date, datetime
 
 import yaml
 
@@ -14,11 +14,14 @@ from src.enum.tag import Tag
 if __name__ == "__main__":
 
     parser = ArgumentParser()
+    # REQUIRED
     parser.add_argument("input", type=str, help="Input osm.pbf file path.")
     parser.add_argument("nation", type=str, help="Nation name.")
     parser.add_argument("mode", type=str, help="Process mode, Output file name")
+
+    # OPTIONAL
     parser.add_argument("--limit_relation_id", type=str, help="If set, limit relation id will be changed from nation to id set.")
-    parser.add_argument("--divide", const=True, default=False, nargs="?")  # Set as a flag
+    parser.add_argument("--divide", type=str, help="format: id1, id2, id3 ...", nargs="+")
     parser.add_argument("--tags", type=str, help="format: tag_name1 search_value1 tag_name2 search_value2 ...", nargs="+")
     parser.add_argument("--debug", const=True, default=False, nargs="?")  # Set as a flag
     args = parser.parse_args()
@@ -47,11 +50,11 @@ if __name__ == "__main__":
     DEBUGGING = True if args.debug else False
     # mode
     rings_mode = ["water", "village"]
-    lines_mode = ["coastline", "highway"]
+    lines_mode = ["coastline", "highway", "ferry", "tunnel", "subway", "railway"]
 
-    # road level
+    # road LEVEL_DICT
     highways_type = ["motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential"]
-    highways_level = dict(zip(highways_type, [1, 2, 3, 4, 5, 6, 7]))
+    highways_level = dict(zip(highways_type, ["1", "2", "3", "4", "5", "6", "7"]))
 
     try:
         with open('src/resource/logback.yaml', 'r') as stream:
@@ -66,22 +69,24 @@ if __name__ == "__main__":
         logging.basicConfig(level=logging.DEBUG)
         traceback.print_exc()
         logging.debug("Error in Logging Configuration, Using default configs")
-
     logging.info("============================================")
+    logging.info("Greetings fella, how's going?")
+    logging.info(f"Start time: {datetime.now()}")
+    logging.info("--------------------------------------------")
     logging.info(f"MODE: {mode}")
     logging.info(f"INPUT FILE PATH: {input_path}")
     logging.info(f"OUTPUT FILE PATH: {output_path}")
     logging.info(f"PROCESSING NATION: {nation}")
     logging.info(f"RELATION ID OF LIMIT AREA: {limit_relation_id}")
     logging.info(f"SEARCH TAG WITH VALUE: {tags}")
-    logging.info(f"REMERGE AND DIVIDE: {divide}") if divide else True
+    logging.info(f"REMERGE AND DIVIDE: {True}") if divide else True
     logging.info(f"DEBUGGING: {DEBUGGING}") if DEBUGGING else True
-    logging.info("============================================")
+    logging.info("--------------------------------------------")
 
     if mode in rings_mode:
-        rings.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, mode=mode, tags=tags, debugging=DEBUGGING)
+        rings.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, mode=mode, tags=tags, DEBUGGING=DEBUGGING)
     elif mode in lines_mode:
         if mode == "highway":
-            lines.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, divide=divide, mode=mode, tags=tags, level=highways_level, debugging=DEBUGGING)
+            lines.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, mode=mode, tags=tags, DIVIDE=divide, LEVEL_DICT=highways_level, DEBUGGING=DEBUGGING)
         else:
-            lines.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, divide=divide, mode=mode, tags=tags, debugging=DEBUGGING)
+            lines.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, mode=mode, tags=tags, DIVIDE=divide, DEBUGGING=DEBUGGING)

@@ -16,8 +16,8 @@ from shapely.ops import polygonize, linemerge
 from datetime import date
 import area
 from src.enum.mcc import National
-from src.util.limit_area import get_relation_polygon_with_overpy
-from src.util.merging_utils import is_reverse_needed, reverse_linestring_coords, is_continuous, prepare_data, linemerge_by_wkt
+from src.util.limit_area import get_relation_polygon_with_overpy,prepare_data
+from src.util.merging_utils import is_reverse_needed, reverse_linestring_coords, is_continuous, linemerge_by_wkt
 from src.enum.hofn_type import HofnType
 
 # https://stackoverflow.com/questions/20625582/how-to-deal-with-settingwithcopywarning-in-pandas
@@ -78,19 +78,24 @@ def get_relation_member_data(relation_dict: Dict, way_dict: Dict) -> Dict:
     ring_rel_members_dict = {"RELATION_ID": [], "WAY_ID": [], "NAME": [], "GEOMETRY": [], "ROLE": [], "TYPE": []}
 
     for relation_id, members in relation_dict.items():
-        if relation_id in [4152133]:
-            print("")
         for member in members:
-            if member.get("ROLE") not in ["inner", "outer"]:
+            if relation_id == 11343219:
+                print("")
+            if member.get("ROLE") not in ["inner", "outer", ""]:
                 continue
             way_id = member.get("ID")
             way = way_dict.get(way_id)
+            name = way.get("NAME")
+            role = member.get("ROLE")
+            if role == "":
+                role = "outer"
+                logging.debug(f"{relation_id}: {way_id} has empty role, regarded as OUTER.")
             if way:
                 ring_rel_members_dict.get("RELATION_ID").append(relation_id)
                 ring_rel_members_dict.get("WAY_ID").append(way_id)
                 ring_rel_members_dict.get("NAME").append(way.get("NAME"))
                 ring_rel_members_dict.get("GEOMETRY").append(way.get("GEOMETRY"))
-                ring_rel_members_dict.get("ROLE").append(member.get("ROLE"))
+                ring_rel_members_dict.get("ROLE").append(role)
                 ring_rel_members_dict.get("TYPE").append(member.get("TYPE"))
             else:
                 logging.debug(f"{way_id} cannot be found in way dict, please check.")
@@ -102,8 +107,7 @@ def restructure(relation_member_dict):
     temp = dict()
     for member in relation_member_dict.values():
         relation_id = member.get("RELATION_ID")
-        if relation_id == 4152133:
-            print("")
+
         member.pop("RELATION_ID")
         if not temp.get(relation_id, 0):
             temp[relation_id] = {"outer": [], "inner": []}
@@ -128,9 +132,12 @@ def inners_extracting(inners: List[Dict], islands: List[Dict]):
         islands.append(append)
 
 
-def get_merged_rings(rings: list, polygon_id_used_table: list, merged_way_ids, mode) -> List[Dict]:
+def get_merged_rings(rings: list, polygon_id_used_table: list, mode) -> List[Dict]:
     ############ INLINE FUNCTION ########
-    def get_merged_line(ring, merging_candidates: list, merged_way_ids: list, current_merged_ids) -> LineString:
+    def get_merged_line(ring, merging_candidates: list, current_merged_ids) -> LineString:
+        # Avoid merge with self
+        current_merged_ids.append(ring["WAY_ID"])
+
         merging_line = ring.get("GEOMETRY")
         candidate_line = NotImplemented
         merging_index = 0
@@ -138,23 +145,24 @@ def get_merged_rings(rings: list, polygon_id_used_table: list, merged_way_ids, m
             candidate = merging_candidates[merging_index]
             candidate_line = candidate.get("GEOMETRY")
             candidate_id = candidate.get("WAY_ID")
-
-            if candidate.get('WAY_ID') in merged_way_ids:
-                merging_index += 1
-            else:
-                if is_reverse_needed(merging_line, candidate_line):
-                    # Reverse the line and do merge with current index again.
-                    logging.debug(f"candidate {candidate_id} reversed.")
-                    candidate_line = reverse_linestring_coords(candidate_line)
-                elif is_continuous(merging_line, candidate_line):
-                    logging.debug(f"{ring.get('WAY_ID')} merge with {candidate_id}")
-                    # merge and start new round of iteration.
-                    merging_line = linemerge_by_wkt(merging_line, candidate_line)
-                    current_merged_ids.append(candidate_id)
-                    merged_way_ids.append(candidate_id)
-                    merging_index = 0
-                else:
+            try:
+                if candidate.get('WAY_ID') in current_merged_ids:
                     merging_index += 1
+                else:
+                    if is_reverse_needed(merging_line, candidate_line):
+                        # Reverse the line and do merge with current index again.
+                        logging.debug(f"candidate {candidate_id} reversed.")
+                        candidate_line = reverse_linestring_coords(candidate_line)
+                    if is_continuous(merging_line, candidate_line):
+                        logging.debug(f"{ring.get('WAY_ID')} merge with {candidate_id}")
+                        # merge and start new round of iteration.
+                        merging_line = linemerge_by_wkt(merging_line, candidate_line)
+                        current_merged_ids.append(candidate_id)
+                        merging_index = 0
+                    else:
+                        merging_index += 1
+            except:
+                print(f"{candidate.get('WAY_ID')} has some problems.")
         logging.debug(f"Return {merging_line}")
         return merging_line
 
@@ -162,24 +170,24 @@ def get_merged_rings(rings: list, polygon_id_used_table: list, merged_way_ids, m
     # Deep copy with merge candidate.
     merging_candidate = [ring for ring in rings]
     result = []
+    current_merged_ids = []
     for ring in rings:
-        current_merged_ids = []
-        if ring.get('WAY_ID') not in merged_way_ids:
-            logging.debug(f"WAY:{ring.get('WAY_ID')} start doing merge.")
-            # Avoid merge with self.
-            merged_way_ids.append(ring.get('WAY_ID'))
-            # Get merged line with current ring.
-            current_merged_ids.append(ring.get('WAY_ID'))
-            merged_line = get_merged_line(ring, merging_candidate, merged_way_ids, current_merged_ids)
+        # If being merged, skip it
+        if ring.get('WAY_ID') in current_merged_ids:
+            continue
 
-            # Choose way_id from merged line.
-            for merged_id in current_merged_ids:
-                if merged_id not in polygon_id_used_table:
-                    result.append({'POLYGON_ID': merged_id, "POLYGON_NAME": ring.get("NAME"), "POLYGON_STR": merged_line, "HOFN_TYPE": HofnType[mode].value, "ROAD_LEVEL": 0})
-                    polygon_id_used_table.append(merged_id)
-                    break
-                else:
-                    logging.debug(f"{merged_id} has been used, change another polygon id")
+        logging.debug(f"WAY:{ring.get('WAY_ID')} start doing merge.")
+        merged_line = get_merged_line(ring, merging_candidate, current_merged_ids)
+
+        # Choose way_id from merged line.
+        for merged_id in current_merged_ids:
+            if merged_id not in polygon_id_used_table:
+                result.append({'POLYGON_ID': merged_id, "POLYGON_NAME": ring.get("NAME"), "POLYGON_STR": merged_line, "HOFN_TYPE": HofnType[mode].value, "ROAD_LEVEL": 0})
+                polygon_id_used_table.append(merged_id)
+                break
+            else:
+                logging.debug(f"{merged_id} has been used, change another polygon id")
+
     return result
 
 
@@ -246,14 +254,13 @@ def remove_over_intersection_outer(rings: geopandas.GeoDataFrame) -> geopandas.G
 
 
 # %%
-def main(input_path, output_path, nation, limit_relation_id, mode, tags, debugging=False):
-    DEBUGGING = debugging
+def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGING=False):
     IS_VILLAGE = True if mode == "village" else False
     IS_WATER = True if mode == "water" else False
     island_output_path = f"data/output/island/{nation}"
     if not os.path.isdir(island_output_path):
         os.makedirs(island_output_path)
-
+    #######################################################################################
     # 1. Get coastlines data from osm.pbf file
     logging.info(f"Start extracting rings ...")
     logging.info(f"[1/4] Loading data from {input_path}, tags: {tags}")
@@ -262,7 +269,7 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, debuggi
     area_handler = RingHandler(tags, mode)
     area_handler.apply_file(input_path, idx="flex_mem", locations=True)
     logging.debug(f"Get data completed, taking {time.time() - start_time} seconds")
-
+    #######################################################################################
     # 2. Get data prepared
     logging.info(f"[2/4] Preparing data with intersecting with relation id {limit_relation_id}")
     relation_dict = area_handler.relation_dict
@@ -280,7 +287,7 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, debuggi
     relation_member_data = prepare_data(relation_member_data, limit_area.wkt, "GEOMETRY")
     relation_member_dict = relation_member_data.to_dict("index")
     relation_member_dict = restructure(relation_member_dict)
-
+    #######################################################################################
     # 3.Merging rings
     logging.info(f"[3/4] Merging rings with outer and inner rings, and extract inner rings as islands.")
 
@@ -290,15 +297,13 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, debuggi
     # Results with rings and islands
     relation_result = []
     islands = []
-    # List[Index] to skip those have been merged
-    merged_way_ids = []
+
     for relation_id, relation in relation_member_dict.items():
         logging.debug(f"Relation: {relation_id} doing merge.")
+
         outers = relation.get("outer")
-        if relation_id == 4152133:
-            print("")
         if outers:
-            outers = get_merged_rings(outers, polygon_id_used_table, merged_way_ids, mode)
+            outers = get_merged_rings(outers, polygon_id_used_table, mode)
             relation_member_dict[relation_id] = outers
             for outer in outers:
                 relation_result.append(outer)
@@ -306,13 +311,12 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, debuggi
         if IS_WATER:
             inners = relation.get("inner")
             if inners:
-                inners = get_merged_rings(inners, polygon_id_used_table, merged_way_ids, "island")
+                inners = get_merged_rings(inners, polygon_id_used_table, "island")
                 inners_extracting(inners, islands)
 
         logging.debug("outer and inner merge process completed.")
-
+    #######################################################################################
     # 4. polygonized data and output.
-
     logging.info("[4/4] Polygonizing data and output.")
     if IS_WATER:
         remove_id_list = []
@@ -343,4 +347,6 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, debuggi
         rings.to_file(f"{output_path}/{mode}.geojson", driver="GeoJSON")
     else:
         rings.to_csv(f"{output_path}/{mode}.tsv", sep="\t", index=False)
+        rings.to_file(f"{output_path}/{mode}.geojson", driver="GeoJSON")
+
     logging.info("rings process completed.")
