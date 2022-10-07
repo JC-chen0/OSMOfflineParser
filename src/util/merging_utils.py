@@ -22,7 +22,7 @@ def reverse_linestring_coords(geometry):
 def is_continuous(line1, line2):
     head, tail = line1.coords[0], line1.coords[-1]
     compare_head, compare_tail = line2.coords[0], line2.coords[-1]
-    return head == compare_tail or tail == compare_head
+    return head == compare_tail or tail == compare_head and line1 != line2
 
 
 def is_reverse_needed(line1, line2):
@@ -141,9 +141,6 @@ def get_merged_and_divided_by_threshold(geometry_dict, dividing_result_dict, tol
 
 
 def linemerge_by_wkt(line1, line2) -> LineString:
-    if line1 == line2:
-        raise ValueError("Attempt to merge two equal linestring.")
-
     line1_coords = line1.coords[:]
     line2_coords = line2.coords[:]
     source, target = (line1, line2) if line1_coords[-1] == line2_coords[0] else (line2, line1)

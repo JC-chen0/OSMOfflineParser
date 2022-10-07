@@ -53,27 +53,27 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
     IS_FERRY = True if mode in ["ferry"] else False
     ###############################################################################################
     # 1. GET DATA
-    # logging.info("[1/3] Prepare line data from osm.pbf file.")
-    # logging.info(f"Reading file from {input_path}")
-    # line_handler = LineHandler(tags, mode, LEVEL_DICT)
-    # line_handler.apply_file(input_path, idx="flex_mem", locations=True)
-    # line_df = geopandas.GeoDataFrame(line_handler.lines, geometry="POLYGON_STR")
-    # line_df.to_file(f"{output_path}/unmerged.geojson", driver="GeoJSON", encoding="utf-8")
-    # ###############################################################################################
-    # # 2. MERGE ALL LINE
-    # logging.info("[2/3] Merge all the line.")
-    # start_time = time.time()
-    #
-    # # Offline but cost more time
+    logging.info("[1/3] Prepare line data from osm.pbf file.")
+    logging.info(f"Reading file from {input_path}")
+    line_handler = LineHandler(tags, mode, LEVEL_DICT)
+    line_handler.apply_file(input_path, idx="flex_mem", locations=True)
+    line_df = geopandas.GeoDataFrame(line_handler.lines, geometry="POLYGON_STR")
+    line_df.to_file(f"{output_path}/unmerged.geojson", driver="GeoJSON", encoding="utf-8")
+    ###############################################################################################
+    # 2. MERGE ALL LINE
+    logging.info("[2/3] Merge all the line.")
+    start_time = time.time()
+
+    # Offline but cost more time
     # territorial_geom = get_limit_relation_geom(input_path, limit_relation_id)
-    # # Online, cost api loads
-    # # territorial_geom = get_relation_polygon_with_overpy(limit_relation_id)
-    # tmp = read_file_and_rename_geometry(f"{output_path}/unmerged.geojson")
-    # data = prepare_data(tmp, territorial_geom.wkt, "POLYGON_STR")
-    data = read_file_and_rename_geometry(f"{output_path}/unmerged.geojson")
+    # Online, cost api loads
+    territorial_geom = get_relation_polygon_with_overpy(limit_relation_id)
+    tmp = read_file_and_rename_geometry(f"{output_path}/unmerged.geojson")
+    data = prepare_data(tmp, territorial_geom.wkt, "POLYGON_STR")
+
     levels = Tag.get_levels(mode, LEVEL_DICT) if IS_LEVEL else [0]
     unmergeds = [data[data["ROAD_LEVEL"] == level] for level in levels]
-    result = {"POLYGON_ID": [], "POLYGON_NAME": [], "POLYGON_STR": [], "HOFN_TYPE": [], "ROAD_LEVEL": []}
+    result = dict()
     for unmerged in unmergeds:
         logging.info(f"Start process level = {unmerged.iloc[0]['ROAD_LEVEL']}")
         unmerged_in_current_level: dict = unmerged.set_index(unmerged["POLYGON_ID"]).to_dict('index')
@@ -82,65 +82,43 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
         i = len(unmerged_values) - 1
         j = i - 1
         while len(unmerged_values):
-            try:
-                mainline = unmerged_values[i]["POLYGON_STR"]
-                candidate = unmerged_values[j]["POLYGON_STR"]
-                if is_reverse_needed(mainline, candidate):
-                    logging.debug(f"{unmerged_values[j]['POLYGON_ID']} reversed.")
-                    candidate = reverse_linestring_coords(candidate)
-                if is_continuous(mainline, candidate):
-                    logging.debug(f"{unmerged_values[i]['POLYGON_ID']} merged with {unmerged_values[j]['POLYGON_ID']}.")
-                    mainline = linemerge_by_wkt(mainline, candidate)
-                    unmerged_values[i]["POLYGON_STR"] = mainline
-                    unmerged_values.pop(j)
-                    i = len(unmerged_values) - 1
-                    j = i - 1
-                else:
-                    j -= 1
-                if i == 0:
-                    print("")
+            if j == -1 or i == 0:
+                result[f"{unmerged_values[i]['POLYGON_ID']}"] = unmerged_values[i]
+                unmerged_values.pop(i)
+                i = len(unmerged_values) - 1
+                j = i - 1
+                continue
 
-                if j == 0 or i == 0:
-                    result.get("POLYGON_ID").append(unmerged_values[i]["POLYGON_ID"])
-                    result.get("POLYGON_NAME").append(unmerged_values[i]["POLYGON_NAME"])
-                    result.get("POLYGON_STR").append(unmerged_values[i]["POLYGON_STR"])
-                    result.get("HOFN_TYPE").append(unmerged_values[i]["HOFN_TYPE"])
-                    result.get("ROAD_LEVEL").append(unmerged_values[i]["ROAD_LEVEL"])
-                    unmerged_values.pop(i)
-                    i = len(unmerged_values) - 1
-                    j = i - 1
-            except:
-                print("")
-        # candidates = unmerged.set_index(unmerged["POLYGON_ID"]).to_dict('index')
-        # level_result = deepcopy(candidates)
-        # unmerged_ids = list(level_result.keys())
-        # i = len(unmerged_ids) - 1
-        # while i >= 0:
-        #     unmerged_id = unmerged_ids[i]
-        #     row = level_result[unmerged_id]
-        #     unmerged_ids.remove(unmerged_id)
-        #     candidates.pop(unmerged_id)
-        #     merge_with_candidates_dict(row, unmerged_ids, level_result, candidates)
-        #     i = len(unmerged_ids) - 1
-        # result.update(level_result)
+            mainline = unmerged_values[i]["POLYGON_STR"]
+            candidate = unmerged_values[j]["POLYGON_STR"]
+
+            if mainline.coords[-1] == candidate.coords[0] or mainline.coords[-1] == candidate.coords[-1]:
+                logging.debug(f"{unmerged_values[i]['POLYGON_ID']} merged with {unmerged_values[j]['POLYGON_ID']}.")
+                mainline = linemerge_by_wkt(mainline, candidate)
+                unmerged_values[i]["POLYGON_STR"] = mainline
+                unmerged_values.pop(j)
+                i = len(unmerged_values) - 1
+                j = i - 1
+            else:
+                j -= 1
     #############################################################################
     # After merging, we need some operations with difference mode
     # ONLY those linestring being ringed need to filter with area threshold
+    merged = geopandas.GeoDataFrame.from_dict(result, orient="index")
     if IS_RING:
         result = filter_small_island(result, area_threshold=40000)
-    merged = geopandas.GeoDataFrame.from_dict(result, orient="index")
     if IS_FERRY:
         merged["POLYGON_STR"] = merged.POLYGON_STR.apply(lambda polygon_str: polygon_str.buffer(15 / 6371000 / math.pi * 180))
 
     merged = merged.set_geometry("POLYGON_STR")
-    merged.to_file(f"{output_path}/merged.geojson", driver="GeoJSON")
+    merged.to_file(f"{output_path}/merged.geojson", driver="GeoJSON", index=False)
     logging.debug(f"Merging completed, taking {time.time() - start_time} seconds")
     ###########################################################################################
     # [OPTIONAL] 3. re-merge and DIVIDE
     threshold = 100.0
     logging.info(f"[OPTIONAL][3/3] Extracting geometry, re-merge and DIVIDE with threshold {threshold} km.")
     if DIVIDE:
-        merged = geopandas.read_file(f"{output_path}/merged.geojson", driver="GeoJSON")
+        merged = read_file_and_rename_geometry(f"{output_path}/merged.geojson")
         divide_result_dict = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'POLYGON_STR': [], 'HOFN_TYPE': [], 'ROAD_LEVEL': []}
         # Find all the line which length is larger than [user-set] km, DIVIDE it later.
         lengthy_geometry_ids = DIVIDE
@@ -149,7 +127,7 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
         logging.debug("Start re-merge and DIVIDE.")
         for lengthy_id in lengthy_geometry_ids:
             logging.debug(f"{lengthy_id} is being re-merged and divided.")
-            lengthy_wkt = list(merged.loc[merged["POLYGON_ID"] == int(lengthy_id)]["POLYGON_STR"])[0].wkt
+            lengthy_wkt = list(merged.loc[merged["POLYGON_ID"] == int(lengthy_id)]["geometry"])[0].wkt
             tmp = read_file_and_rename_geometry(f"{output_path}/unmerged.geojson")
             lengthy = prepare_data(tmp, lengthy_wkt, "POLYGON_STR")
             lengthy_dict = lengthy.set_index(lengthy["POLYGON_ID"]).to_dict('index')

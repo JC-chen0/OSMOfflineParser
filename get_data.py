@@ -28,7 +28,7 @@ if __name__ == "__main__":
     input_path = args.input
     nation = args.nation
     limit_relation_id = args.limit_relation_id if args.limit_relation_id else National[nation].get_relation_id()
-    divide = True if args.divide else False
+    divide = args.divide
     mode = args.mode
     output_path = f"data/output/{mode}/{nation}"
     if os.path.isdir(output_path) is not True:
