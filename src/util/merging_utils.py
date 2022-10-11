@@ -1,17 +1,16 @@
 import logging
 import math
+import time
 import traceback
 from copy import deepcopy
-from typing import Dict
+from typing import Dict, List
 
 import geopandas
 import pandas
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Polygon
 from shapely.ops import linemerge, polygonize
 
-from src.util.limit_area import prepare_data
-from src.util.read_data import read_file_and_rename_geometry
-
+from src.enum.hofn_type import HofnType
 
 def reverse_linestring_coords(geometry):
     reverse = geometry
@@ -22,7 +21,7 @@ def reverse_linestring_coords(geometry):
 def is_continuous(line1, line2):
     head, tail = line1.coords[0], line1.coords[-1]
     compare_head, compare_tail = line2.coords[0], line2.coords[-1]
-    return head == compare_tail or tail == compare_head and line1 != line2
+    return (head == compare_tail or tail == compare_head) and line1 != line2
 
 
 def is_reverse_needed(line1, line2):
@@ -81,13 +80,13 @@ def get_merged_and_divided_by_threshold(geometry_dict, dividing_result_dict, tol
     compare_geometry_dict = deepcopy(geometry_dict)
     reach_length_limit_list = []
     start_id = next(iter(compare_geometry_dict))
-    start_line = compare_geometry_dict.get(start_id).get("POLYGON_STR")
+    start_line = compare_geometry_dict.get(start_id).get("geometry")
     merging = True
     last_segment = False
     count = 0
     while merging:
         for compare_poly_id, compare_poly_dict in compare_geometry_dict.items():
-            compare_geometry = compare_poly_dict["POLYGON_STR"]
+            compare_geometry = compare_poly_dict["geometry"]
 
             if compare_poly_id in reach_length_limit_list and not last_segment:
 
@@ -109,20 +108,20 @@ def get_merged_and_divided_by_threshold(geometry_dict, dividing_result_dict, tol
                     if start_line.length * 6371 * math.pi / 180 > tolerance:
                         merging = False
 
-                    compare_geometry_dict.get(start_id)["POLYGON_STR"] = merge_linestring
+                    compare_geometry_dict.get(start_id)["geometry"] = merge_linestring
                     result_dict.get("POLYGON_ID").append(compare_geometry_dict.get(start_id)["POLYGON_ID"])
                     result_dict.get("POLYGON_NAME").append(compare_geometry_dict.get(start_id)["POLYGON_NAME"])
-                    result_dict.get("POLYGON_STR").append(start_line)
+                    result_dict.get("geometry").append(start_line)
                     result_dict.get("HOFN_TYPE").append(compare_geometry_dict.get(start_id)["HOFN_TYPE"])
                     result_dict.get("ROAD_LEVEL").append(compare_geometry_dict.get(start_id)["ROAD_LEVEL"])
                     merging = False
 
                 elif merge_linestring.length * 6371 * math.pi / 180 >= length_threshold:
                     reach_length_limit_list.append(start_id)
-                    compare_geometry_dict.get(start_id)["POLYGON_STR"] = start_line
+                    compare_geometry_dict.get(start_id)["geometry"] = start_line
                     result_dict.get("POLYGON_ID").append(compare_geometry_dict.get(start_id)["POLYGON_ID"])
                     result_dict.get("POLYGON_NAME").append(compare_geometry_dict.get(start_id)["POLYGON_NAME"])
-                    result_dict.get("POLYGON_STR").append(start_line)
+                    result_dict.get("geometry").append(start_line)
                     result_dict.get("HOFN_TYPE").append(compare_geometry_dict.get(start_id)["HOFN_TYPE"])
                     result_dict.get("ROAD_LEVEL").append(compare_geometry_dict.get(start_id)["ROAD_LEVEL"])
                     # Restart looping
@@ -157,10 +156,189 @@ def filter_small_island(merged: dict, area_threshold: int):
     small_island_list = []
     for key, values in merged.items():
         try:
-            geometry = values["POLYGON_STR"]
+            geometry = values["geometry"]
             if list(polygonize(geometry))[0].area * 6371000 * math.pi / 180 * 6371000 * math.pi / 180 < area_threshold:
                 small_island_list.append(key)
         except:
             logging.debug(f"POLYGON_ID: {key} cannot be polygonized.")
     [filtered.pop(key) for key in small_island_list]
     return filtered
+
+#################################################
+# RINGS
+def get_relation_member_data(relation_dict: Dict, way_dict: Dict) -> Dict:
+    ring_rel_members_dict = {"relation_id": [], "way_id": [], "name": [], "geometry": [], "role": [], "type": []}
+
+    for relation_id, members in relation_dict.items():
+        for member in members:
+            if member.get("role") not in ["inner", "outer", ""]:
+                continue
+            way_id = member.get("id")
+            way = way_dict.get(way_id, False)
+            if way is False:
+                logging.debug(f"{way_id} is None in way_dict")
+                continue
+            name = way.get("name")
+            role = member.get("role")
+            if role == "":
+                role = "outer"
+                logging.debug(f"{relation_id}: {way_id} has empty role, regarded as OUTER.")
+            if way:
+                ring_rel_members_dict.get("relation_id").append(relation_id)
+                ring_rel_members_dict.get("way_id").append(way_id)
+                ring_rel_members_dict.get("name").append(way.get("name"))
+                ring_rel_members_dict.get("geometry").append(way.get("geometry"))
+                ring_rel_members_dict.get("role").append(role)
+                ring_rel_members_dict.get("type").append(member.get("type"))
+            else:
+                logging.debug(f"{way_id} cannot be found in way dict, please check.")
+    return ring_rel_members_dict
+
+
+def restructure(relation_member_dict):
+    temp = dict()
+    for member in relation_member_dict.values():
+        relation_id = member.get("relation_id")
+
+        member.pop("relation_id")
+        if not temp.get(relation_id, 0):
+            temp[relation_id] = {"outer": [], "inner": []}
+
+        if member.get("role") == "inner":
+            temp.get(relation_id).get("inner").append(member)
+        elif member.get("role") == "outer":
+            temp.get(relation_id).get("outer").append(member)
+        else:  # ONLY for debug purpose.
+            logging.debug(f"Find way {member.get('way_id')} with invalid role {member.get('role')}.")
+    return temp
+
+
+def inners_extracting(inners: List[Dict], islands: List[Dict]):
+    for inner in inners:
+        append = {"POLYGON_ID": inner.get("POLYGON_ID"),
+                  "POLYGON_NAME": inner.get("POLYGON_NAME"),
+                  "geometry": inner.get("geometry"),
+                  "HOFN_TYPE": "5",
+                  "ROAD_LEVEL": "0"}
+        islands.append(append)
+
+
+def get_merged_rings(rings: list, polygon_id_used_table: list, mode) -> List[Dict]:
+    ############ INLINE FUNCTION ########
+    def get_merged_line(ring, merging_candidates: list, current_merged_ids) -> LineString:
+        # Avoid merge with self
+        current_merged_ids.append(ring["way_id"])
+
+        merging_line = ring.get("geometry")
+        candidate_line = NotImplemented
+        merging_index = 0
+        while merging_index < len(merging_candidates):
+            candidate = merging_candidates[merging_index]
+            candidate_line = candidate.get("geometry")
+            candidate_id = candidate.get("way_id")
+            try:
+                if candidate.get('way_id') in current_merged_ids:
+                    merging_index += 1
+                else:
+                    if is_reverse_needed(merging_line, candidate_line):
+                        # Reverse the line and do merge with current index again.
+                        logging.debug(f"candidate {candidate_id} reversed.")
+                        candidate_line = reverse_linestring_coords(candidate_line)
+                    if is_continuous(merging_line, candidate_line):
+                        logging.debug(f"{ring.get('way_id')} merge with {candidate_id}")
+                        # merge and start new round of iteration.
+                        merging_line = linemerge_by_wkt(merging_line, candidate_line)
+                        current_merged_ids.append(candidate_id)
+                        merging_index = 0
+                    else:
+                        merging_index += 1
+            except:
+                print(f"{candidate.get('way_id')} has some problems.")
+        logging.debug(f"Return {merging_line}")
+        return merging_line
+
+    #################################################################################
+    # Deep copy with merge candidate.
+    merging_candidate = [ring for ring in rings]
+    result = []
+    current_merged_ids = []
+    for ring in rings:
+        # If being merged, skip it
+        if ring.get('way_id') in current_merged_ids:
+            continue
+
+        logging.debug(f"WAY:{ring.get('way_id')} start doing merge.")
+        merged_line = get_merged_line(ring, merging_candidate, current_merged_ids)
+
+        # Choose way_id from merged line.
+        for merged_id in current_merged_ids:
+            if merged_id not in polygon_id_used_table:
+                result.append({'POLYGON_ID': merged_id, "POLYGON_NAME": ring.get("name"), "geometry": merged_line, "HOFN_TYPE": HofnType[mode].value, "ROAD_LEVEL": 0})
+                polygon_id_used_table.append(merged_id)
+                break
+            else:
+                logging.debug(f"{merged_id} has been used, change another polygon id")
+
+    return result
+
+
+def polygonize_with_try_catch(row, remove_list):
+    try:
+        return Polygon(row["geometry"])
+    except:
+        logging.debug(f"{row['POLYGON_ID']} cannot be polygonized, geometry is {row['geometry']}, return origin LINESTRING instead")
+        remove_list.append(row['POLYGON_ID'])
+        return row["geometry"]
+
+
+def remove_within_outer(rings: geopandas.GeoDataFrame) -> geopandas.GeoDataFrame:
+    def is_within(row, compare: geopandas.GeoSeries, current_index):
+        try:
+            polygons = compare.drop(current_index)
+            within = polygons.contains(row["geometry"])
+            if True in list(within):
+                logging.debug(f"{row['POLYGON_ID']} will be removed due to within other polygon.")
+                return 1
+            return 0
+        except:
+            logging.debug(f"{row['POLYGON_ID']} cannot do contains.")
+            traceback.print_exc()
+
+    start_time = time.time()
+    compare = rings["geometry"]
+    for index, row in rings.iterrows():
+        rings.at[index, "within"] = is_within(row, compare, index)
+    extract = rings[rings["within"] != 1]
+    logging.debug(f"remove within outer, taking {time.time() - start_time}")
+    extract = extract.drop(columns=["within"])
+    return extract
+
+
+def remove_over_intersection_outer(rings: geopandas.GeoDataFrame) -> geopandas.GeoDataFrame:
+    def is_over_intersect(row, compare: geopandas.GeoSeries, current_index):
+        try:
+            geometry = row["geometry"]
+            polygons = compare.drop(current_index)
+            intersects = polygons.intersects(geometry)
+            if True in list(intersects):
+                true_indexes = [i for i, x in intersects.iteritems() if x]
+                for index in true_indexes:
+                    intersect_polygon = geometry.difference(polygons[index])
+                    cover_percentage = (intersect_polygon.area / geometry.area) * 100
+                    if cover_percentage < 3:
+                        print(f"{row['POLYGON_ID']} will be removed due to over_intersection")
+                        return 1
+            return 0
+        except:
+            logging.debug(f"{row['POLYGON_ID']} cannot do intersect.")
+            traceback.print_exc()
+
+    start_time = time.time()
+    compare = rings["geometry"]
+    rings["over_intersect"] = 0
+    for index, row in rings.iterrows():
+        rings.at[index, "over_intersect"] = is_over_intersect(row, compare, index)
+    extract = rings[rings["over_intersect"] != 1]
+    extract = extract.drop(columns=["over_intersect"])
+    print(f"remove within outer, taking {time.time() - start_time}")
+    return extract
