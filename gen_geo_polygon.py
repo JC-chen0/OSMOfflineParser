@@ -11,13 +11,13 @@ import pandas
 if __name__ == "__main__":
 
     parser = ArgumentParser()
-    parser.add_argument("nation", type=str, help="Nation name.")
+    parser.add_argument("mcc", type=str, help="mcc")
     parser.add_argument("--hofn_types", type=str, help="format: HofnType1 HofnType2 ...", nargs="+")
     parser.add_argument("--get_data", const=True, default=False, nargs="?")  # Set as a flag
     args = parser.parse_args()
-    nation = args.nation
+    mcc = args.mcc
+    nation = National.get_country_by_mcc(mcc)
     hofn_types = args.hofn_types
-    mcc = National[nation].get_mcc()
 
     files = {hofn_type: pandas.read_csv(f"data/output/{HofnType(hofn_type).name}/{nation}/{HofnType(hofn_type).name}.tsv", sep="\t") for hofn_type in hofn_types}
     for hofn_type, file in files.items():
@@ -31,7 +31,7 @@ if __name__ == "__main__":
     # 4. check POLYGON_STR is valid.
     for hofn_type, file in files.items():
         print(f"Current Hofn type: {hofn_type}")
-        file["POLYGON_ID"] = file.apply(lambda row: f"{mcc}01{'0'+hofn_type if int(hofn_type) < 10 else hofn_type}{row['POLYGON_ID']}", axis=1)  # Set polygon_id
+        file["POLYGON_ID"] = file.apply(lambda row: f"{mcc}01{'0' + hofn_type if int(hofn_type) < 10 else hofn_type}{row['POLYGON_ID']}", axis=1)  # Set polygon_id
         file.loc[file['POLYGON_NAME'].isnull(), "POLYGON_NAME"] = "UNKNOWN"
         # 1.
         multi_polygon_df = file[file.geometry.apply(lambda x: x.type == "MultiPolygon")]
@@ -64,19 +64,19 @@ if __name__ == "__main__":
             file["geometry"] = file.apply(lambda row: shapely.wkt.loads(shapely.wkt.dumps(row["geometry"], rounding_precision=5)), axis=1)
             print(f"{hofn_type} rounding precision is set to default {5}")
         # 4.
-        if hofn_type in ["01", "05", "10", "11"]:
-            if not all(file["POLYGON_STR"].is_valid):
+        if hofn_type in ["1", "5", "10", "11"]:
+            if not all(file["geometry"].is_valid):
                 invalid = file.is_valid
                 print("=========================================")
-                print(file.loc[~invalid][["POLYGON_ID", "POLYGON_STR"]], end="\n\n")
+                print(file.loc[~invalid][["POLYGON_ID", "geometry"]], end="\n\n")
                 print("Found invalid polygon showing above, please check")
                 exit()
-        elif hofn_type == "02":
+        elif hofn_type == "2":
 
-            if not all(file["POLYGON_STR"].is_simple):
+            if not all(file["geometry"].is_simple):
                 invalid = file.is_valid
                 print("=========================================")
-                print(file.loc[~invalid][["POLYGON_ID", "POLYGON_STR"]], end="\n\n")
+                print(file.loc[~invalid][["POLYGON_ID", "geometry"]], end="\n\n")
                 print("Found invalid linestring showing above, please check")
                 exit()
         print(f"{hofn_type} pass polygon validation")

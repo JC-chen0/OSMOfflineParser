@@ -10,7 +10,7 @@ import pandas
 from typing import Dict, List
 from shapely import wkt
 from src.util.limit_area import get_relation_polygon_with_overpy, prepare_data, get_limit_relation_geom
-from src.util.merging_utils import get_relation_member_data, restructure, inners_extracting, get_merged_rings, polygonize_with_try_catch
+from src.util.merging_utils import get_relation_member_data, restructure, inners_extracting, get_merged_rings, polygonize_with_try_catch, remove_over_intersection_outer
 from src.enum.hofn_type import HofnType
 
 # https://stackoverflow.com/questions/20625582/how-to-deal-with-settingwithcopywarning-in-pandas
@@ -99,7 +99,7 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
     way_rings = prepare_data(way_rings, limit_area.wkt)
     rel_rings = prepare_data(rel_rings, limit_area.wkt)
 
-    relation_member_dict: Dict = get_relation_member_data(relation_dict, way_dict)
+    relation_member_dict: Dict = get_relation_member_data(relation_dict, way_dict, tags=["outer", "inner", ""])
     relation_member_data: geopandas.GeoDataFrame = geopandas.GeoDataFrame(relation_member_dict)
     relation_member_data = prepare_data(relation_member_data, limit_area.wkt)
     relation_member_dict = relation_member_data.to_dict("index")
@@ -156,9 +156,9 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
     logging.debug(f"Remove {remove_id_list}  due to unpolygonizable issue.")
     logging.debug("rings polygonized done.")
     rings = rings.drop(rings[rings.geometry.area * 6371000 * math.pi / 180 * 6371000 * math.pi / 180 < 200 * 200].index)
-    # if IS_VILLAGE:
-    #     rings = remove_within_outer(rings)
-    #     rings = remove_over_intersection_outer(rings)
+    if IS_VILLAGE:
+        # rings = remove_within_outer(rings)
+        rings = remove_over_intersection_outer(rings)
 
     if DEBUGGING:
         rings.to_file(f"{output_path}/{mode}.geojson", driver="GeoJSON", encoding="utf-8")

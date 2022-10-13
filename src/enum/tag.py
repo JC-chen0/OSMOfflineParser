@@ -10,6 +10,8 @@ class Tag(Enum):
     # highway = {"highway": ["motorway", "trunk", "primary", "secondary", "tertiary"]}  # highway control in get_data config session
     railway = {"railway": "rail", "route": ["railway", "train"]}
     ferry = {"route": "ferry"}
+    ship_road = {"route": "ferry"}
+    building = {""}
     def __init__(self, tags):
         self.tags = tags
 

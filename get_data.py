@@ -8,6 +8,8 @@ import yaml
 import src.lines as lines
 import src.rings as rings
 from argparse import ArgumentParser
+
+from src.enum.hofn_type import HofnType
 from src.enum.mcc import National
 from src.enum.tag import Tag
 
@@ -16,8 +18,9 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     # REQUIRED
     parser.add_argument("input", type=str, help="Input osm.pbf file path.")
-    parser.add_argument("nation", type=str, help="Nation name.")
-    parser.add_argument("mode", type=str, help="Process mode, Output file name")
+    parser.add_argument("mcc", type=str, help="mcc")
+    # parser.add_argument("nation", type=str, help="Nation name.")
+    parser.add_argument("hofn_type", type=str, help="Process hofn type, Output file name")
 
     # OPTIONAL
     parser.add_argument("--limit_relation_id", type=str, help="If set, limit relation id will be changed from nation to id set.")
@@ -26,10 +29,11 @@ if __name__ == "__main__":
     parser.add_argument("--debug", const=True, default=False, nargs="?")  # Set as a flag
     args = parser.parse_args()
     input_path = args.input
-    nation = args.nation
+    nation = National.get_country_by_mcc(args.mcc)
     limit_relation_id = args.limit_relation_id if args.limit_relation_id else National[nation].get_relation_id()
     divide = args.divide
-    mode = args.mode
+    hofn_type = args.hofn_type
+    mode = HofnType(hofn_type).name
     output_path = f"data/output/{mode}/{nation}"
     if os.path.isdir(output_path) is not True:
         os.makedirs(output_path)
@@ -51,7 +55,7 @@ if __name__ == "__main__":
     # mode
     rings_mode = ["water", "village"]
     lines_mode = ["coastline", "highway", "ferry", "tunnel", "subway", "railway"]
-
+    building = ["building"]
     # road LEVEL_DICT
     highways_type = ["motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential"]
     highways_level = dict(zip(highways_type, ["1", "2", "3", "4", "5", "6", "7"]))
@@ -90,3 +94,4 @@ if __name__ == "__main__":
             lines.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, mode=mode, tags=tags, DIVIDE=divide, LEVEL_DICT=highways_level, DEBUGGING=DEBUGGING)
         else:
             lines.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, mode=mode, tags=tags, DIVIDE=divide, DEBUGGING=DEBUGGING)
+    # elif mode in building:

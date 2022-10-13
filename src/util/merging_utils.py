@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 import time
 import traceback
 from copy import deepcopy
@@ -11,6 +12,7 @@ from shapely.geometry import LineString, Polygon
 from shapely.ops import linemerge, polygonize
 
 from src.enum.hofn_type import HofnType
+
 
 def reverse_linestring_coords(geometry):
     reverse = geometry
@@ -164,14 +166,15 @@ def filter_small_island(merged: dict, area_threshold: int):
     [filtered.pop(key) for key in small_island_list]
     return filtered
 
+
 #################################################
 # RINGS
-def get_relation_member_data(relation_dict: Dict, way_dict: Dict) -> Dict:
+def get_relation_member_data(relation_dict: Dict, way_dict: Dict, tags:list) -> Dict:
     ring_rel_members_dict = {"relation_id": [], "way_id": [], "name": [], "geometry": [], "role": [], "type": []}
 
     for relation_id, members in relation_dict.items():
         for member in members:
-            if member.get("role") not in ["inner", "outer", ""]:
+            if member.get("role") not in tags:
                 continue
             way_id = member.get("id")
             way = way_dict.get(way_id, False)
@@ -202,7 +205,7 @@ def restructure(relation_member_dict):
 
         member.pop("relation_id")
         if not temp.get(relation_id, 0):
-            temp[relation_id] = {"outer": [], "inner": []}
+            temp[relation_id] = {"outer": [], "inner": [], "other":[]}
 
         if member.get("role") == "inner":
             temp.get(relation_id).get("inner").append(member)
@@ -342,3 +345,6 @@ def remove_over_intersection_outer(rings: geopandas.GeoDataFrame) -> geopandas.G
     extract = extract.drop(columns=["over_intersect"])
     print(f"remove within outer, taking {time.time() - start_time}")
     return extract
+
+
+

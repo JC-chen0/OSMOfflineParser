@@ -40,7 +40,7 @@ def get_limit_relation_geom(filepath, relation_id):
     handler.apply_file(filepath, idx="flex_mem", locations=True)
     way_dict = handler.way_dict
     relation_dict = handler.relation_dict
-    relation_member_dict = get_relation_member_data(relation_dict=relation_dict, way_dict=way_dict)
+    relation_member_dict = get_relation_member_data(relation_dict=relation_dict, way_dict=way_dict, tags=["outer", "inner", ""])
     relation_member_data: geopandas.GeoDataFrame = geopandas.GeoDataFrame(relation_member_dict)
     relation_member_dict = relation_member_data.to_dict("index")
     relation_member_dict = restructure(relation_member_dict)
