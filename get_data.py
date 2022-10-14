@@ -53,7 +53,7 @@ if __name__ == "__main__":
     # config
     DEBUGGING = True if args.debug else False
     # mode
-    rings_mode = ["water", "village"]
+    rings_mode = ["water", "village", "building"]
     lines_mode = ["coastline", "highway", "ferry", "tunnel", "subway", "railway"]
     building = ["building"]
     # road LEVEL_DICT
@@ -94,4 +94,3 @@ if __name__ == "__main__":
             lines.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, mode=mode, tags=tags, DIVIDE=divide, LEVEL_DICT=highways_level, DEBUGGING=DEBUGGING)
         else:
             lines.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, mode=mode, tags=tags, DIVIDE=divide, DEBUGGING=DEBUGGING)
-    # elif mode in building:

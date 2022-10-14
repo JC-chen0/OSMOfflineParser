@@ -11,7 +11,8 @@ class Tag(Enum):
     railway = {"railway": "rail", "route": ["railway", "train"]}
     ferry = {"route": "ferry"}
     ship_road = {"route": "ferry"}
-    building = {""}
+    building = {"building": "", "type": "building"}
+
     def __init__(self, tags):
         self.tags = tags
 

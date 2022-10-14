@@ -32,9 +32,13 @@ class RingHandler(osmium.SimpleHandler):
         self.mode = mode
         self.tags = tags
 
+    # Tags: 1. Value 2. list 3. "" (purely take all the tags)
     def area(self, area):
         try:
-            if any([area.tags.get(key) in value if type(value) == list else area.tags.get(key) == value for key, value in self.tags.items()]):
+            if any([area.tags.get(key) in value
+                    if type(value) == list else area.tags.get(key) == value
+                    if value != "" else area.tags.get("key")
+                    for key, value in self.tags.items()]):
                 ring_id = area.orig_id()
                 ring_name = area.tags.get("name") if area.tags.get("name") else "UNKNOWN"  # create new string object
                 ring_geometry = wkt.loads(wktfab.create_multipolygon(area))
@@ -55,8 +59,12 @@ class RingHandler(osmium.SimpleHandler):
         rings.get("HOFN_TYPE").append(HofnType[self.mode].value)
         rings.get("ROAD_LEVEL").append("0")
 
+    # Tags: 1. Value 2. list 3. "" (purely take all the tags)
     def relation(self, relation):
-        if any([relation.tags.get(key) == value for key, value in self.tags.items()]):
+        if any([relation.tags.get(key) in value
+                if type(value) == list else relation.tags.get(key) == value
+        if value != "" else relation.tags.get("key")
+                for key, value in self.tags.items()]):
             for member in relation.members:
                 if not self.relation_dict.get(relation.id, False):
                     self.relation_dict[relation.id] = []
@@ -91,13 +99,11 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
     relation_dict = area_handler.relation_dict
     way_dict = area_handler.way_dict
     way_rings = geopandas.GeoDataFrame(area_handler.way_rings)
-    rel_rings = geopandas.GeoDataFrame(area_handler.rel_rings)
-
     # Prepare data and free memory
+    del area_handler
     # limit_area = get_relation_polygon_with_overpy(limit_relation_id)
     limit_area = get_limit_relation_geom(input_path, limit_relation_id)
     way_rings = prepare_data(way_rings, limit_area.wkt)
-    rel_rings = prepare_data(rel_rings, limit_area.wkt)
 
     relation_member_dict: Dict = get_relation_member_data(relation_dict, way_dict, tags=["outer", "inner", ""])
     relation_member_data: geopandas.GeoDataFrame = geopandas.GeoDataFrame(relation_member_dict)
@@ -115,21 +121,20 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
     relation_result = []
     islands = []
 
+    # Outer then inner
     for relation_id, relation in relation_member_dict.items():
         logging.debug(f"Relation: {relation_id} doing merge.")
-
-        outers = relation.get("outer")
-        if outers:
-            outers = get_merged_rings(outers, polygon_id_used_table, mode)
-            relation_member_dict[relation_id] = outers
-            for outer in outers:
-                relation_result.append(outer)
 
         if IS_WATER:
             inners = relation.get("inner")
             if inners:
                 inners = get_merged_rings(inners, polygon_id_used_table, "island")
                 inners_extracting(inners, islands)
+
+        outers = relation.get("outer")
+        if outers:
+            outers = get_merged_rings(outers, polygon_id_used_table, mode)
+            relation_member_dict[relation_id] = outers
 
         logging.debug("outer and inner merge process completed.")
     #######################################################################################

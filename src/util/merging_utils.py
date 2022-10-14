@@ -205,7 +205,7 @@ def restructure(relation_member_dict):
 
         member.pop("relation_id")
         if not temp.get(relation_id, 0):
-            temp[relation_id] = {"outer": [], "inner": [], "other":[]}
+            temp[relation_id] = {"outer": [], "inner": []}
 
         if member.get("role") == "inner":
             temp.get(relation_id).get("inner").append(member)
@@ -214,6 +214,8 @@ def restructure(relation_member_dict):
         else:  # ONLY for debug purpose.
             logging.debug(f"Find way {member.get('way_id')} with invalid role {member.get('role')}.")
     return temp
+
+
 
 
 def inners_extracting(inners: List[Dict], islands: List[Dict]):

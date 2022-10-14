@@ -28,10 +28,14 @@ class LineHandler(osmium.SimpleHandler):
         self.mode = mode
         self.level = level
 
+    # Tags: 1. Value 2. list 3. "" (purely take all the tags)
     def way(self, w):
         line_id = w.id
         line_name = w.tags.get("name") if w.tags.get("name") else "UNKNOWN"
-        if any([w.tags.get(key) in value if type(value) == list else w.tags.get(key) == value for key, value in self.tags.items()]):
+        if any([w.tags.get(key) in value
+                if type(value) == list else w.tags.get(key) == value
+                if value != "" else w.tags.get("key")
+                for key, value in self.tags.items()]):
             line = wkt.loads(wkt_factory.create_linestring(w))
             level = self.level.get(w.tags.get(self.mode), False) if self.level else 0  # For LEVEL_DICT-need way
             if level is not False:
@@ -60,6 +64,9 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
         line_handler = LineHandler(tags, mode, LEVEL_DICT)
         line_handler.apply_file(input_path, idx="flex_mem", locations=True)
         line_df = geopandas.GeoDataFrame(line_handler.lines)
+
+        del line_handler
+
         line_df.to_file(f"{output_path}/unmerged.geojson", driver="GeoJSON", index=False, encoding="utf-8")
         # Offline but cost more time
         territorial_geom = get_limit_relation_geom(input_path, limit_relation_id)
