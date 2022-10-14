@@ -1,3 +1,4 @@
+import logging
 import time
 from typing import Dict
 
@@ -12,6 +13,7 @@ from src.util.limit_area import get_relation_polygon_with_overpy, get_limit_rela
 from src.util.merging_utils import get_relation_member_data, get_merged_rings
 
 wktfab = osmium.geom.WKTFactory()
+
 
 class BuildingHandler(osmium.SimpleHandler):
 
@@ -94,80 +96,76 @@ def get_relation_member_data_building(relation_dict: Dict, way_dict: Dict, tags:
 
 
 # %%
+def main(input_path, output_path, nation, limit_relation_id, DEBUGGING=False, ALL_OFFLINE=True):
+    start_time = time.time()
+    logging.info("[1/2] Getting data from .osm.pbf . ")
+    if ALL_OFFLINE:
+        limit_area = get_limit_relation_geom(input_path, limit_relation_id)
+    else:
+        limit_area = get_relation_polygon_with_overpy(limit_relation_id)
 
-start_time = time.time()
-# Config
-input_file = "data/input/country/taiwan-latest.osm.pbf"
-limit_relation_id = "2881027"
-#########
-# Option:
-# 1.
-# limit_area = get_limit_relation_geom(input_file, limit_relation_id)
-# 2.
-limit_area = get_relation_polygon_with_overpy(limit_relation_id)
-print("limit area created.")
+    building_handler = BuildingHandler(Tag["building"].value)
+    building_handler.apply_file(input_path, idx="flex_mem", locations=True)
+    relation_dict = building_handler.relation_dict
+    way_dict = building_handler.way_dict
 
-building_handler = BuildingHandler(Tag["building"].value)
-building_handler.apply_file(input_file, idx="flex_mem", locations=True)
-print("Get data.")
-relation_dict = building_handler.relation_dict
-way_dict = building_handler.way_dict
-print(f"get data completed, taking {time.time() - start_time} seconds")
-# %%
-way_buildings = building_handler.way_buildings
-way_buildings_in_limit_area = []
-for way_building in way_buildings:
-    if way_building.geometry.within(limit_area):
-        way_buildings_in_limit_area.append(Building(way_building.polygon_id, way_building.polygon_name, way_building.geometry, way_building.height, way_building.level))
-header = ["POLYGON_ID", "POLYGON_NAME", "geometry", "HEIGHT", "LEVEL"]
-gdf = geopandas.GeoDataFrame([[building.polygon_id, building.polygon_name, building.geometry, building.height, building.level] for building in way_buildings_in_limit_area], columns=header)
-gdf.to_file("buildings.geojson", driver="GeoJSON")
-# %%
-relation_member_dict = get_relation_member_data_building(relation_dict=relation_dict, way_dict=way_dict, tags=["outer", "inner", "", "outline", "part"])
-relation_member_data: geopandas.GeoDataFrame = geopandas.GeoDataFrame(relation_member_dict)
-relation_member_data = prepare_data(relation_member_data, limit_area.wkt)
-relation_member_dict = relation_member_data.to_dict("index")
+    # %%
+    way_buildings = building_handler.way_buildings
+    way_buildings_in_limit_area = []
+    for way_building in way_buildings:
+        if way_building.geometry.within(limit_area):
+            way_buildings_in_limit_area.append(Building(way_building.polygon_id, way_building.polygon_name, way_building.geometry, way_building.height, way_building.level))
+    header = ["POLYGON_ID", "POLYGON_NAME", "geometry", "HEIGHT", "LEVEL"]
+    gdf = geopandas.GeoDataFrame([[building.polygon_id, building.polygon_name, building.geometry, building.height, building.level] for building in way_buildings_in_limit_area], columns=header)
+    gdf.to_file(f"{output_path}/way_buildings.geojson", driver="GeoJSON") if DEBUGGING else None
+    # %%
+    logging.info("[2/2] Extract inner from outer and get all the part and outline as polygons.")
+    relation_member_dict = get_relation_member_data_building(relation_dict=relation_dict, way_dict=way_dict, tags=["outer", "inner", "", "outline", "part"])
+    relation_member_data: geopandas.GeoDataFrame = geopandas.GeoDataFrame(relation_member_dict)
+    relation_member_data = prepare_data(relation_member_data, limit_area.wkt)
+    relation_member_dict = relation_member_data.to_dict("index")
 
-# %%
-temp = dict()
-for member in relation_member_dict.values():
-    relation_id = member.get("relation_id")
+    # %%
+    temp = dict()
+    for member in relation_member_dict.values():
+        relation_id = member.get("relation_id")
 
-    member.pop("relation_id")
-    geometry = Polygon(member.get("geometry"))
-    building = Building(relation_id=relation_id, polygon_id=member.get("way_id"), polygon_name=member.get("name"), geometry=geometry, role=member.get("role"), height=member.get("height"), level=member.get("level"))
-    if not temp.get(relation_id, 0):
-        temp[relation_id] = {"outer": [], "inner": [], "other": []}
+        member.pop("relation_id")
+        geometry = Polygon(member.get("geometry"))
+        building = Building(relation_id=relation_id, polygon_id=member.get("way_id"), polygon_name=member.get("name"), geometry=geometry, role=member.get("role"), height=member.get("height"), level=member.get("level"))
+        if not temp.get(relation_id, 0):
+            temp[relation_id] = {"outer": [], "inner": [], "other": []}
 
-    if member.get("role") == "inner":
-        temp.get(relation_id).get("inner").append(building)
-    elif member.get("role") == "outer":
-        temp.get(relation_id).get("outer").append(building)
-    else:  # ONLY for debug purpose.
-        temp.get(relation_id).get("other").append(building)
-relation_member_dict = temp
+        if member.get("role") == "inner":
+            temp.get(relation_id).get("inner").append(building)
+        elif member.get("role") == "outer":
+            temp.get(relation_id).get("outer").append(building)
+        else:  # ONLY for debug purpose.
+            temp.get(relation_id).get("other").append(building)
+    relation_member_dict = temp
 
+    logging.info("Group data completed, start to extract.")
+    # %%
+    relation_result = geopandas.GeoDataFrame(columns=header)
+    for relation_id, relation in relation_member_dict.items():
 
-# %%
-relation_result = geopandas.GeoDataFrame(columns=header)
-for relation_id, relation in relation_member_dict.items():
+        outers = relation.get("outer")
+        inners = relation.get("inner")
+        others = relation.get("other")
 
-    outers = relation.get("outer")
-    inners = relation.get("inner")
-    others = relation.get("other")
+        outers_gdf = geopandas.GeoDataFrame([[outer.polygon_id, outer.polygon_name, outer.geometry, outer.height, outer.level] for outer in outers], columns=header)
+        inners_gdf = geopandas.GeoDataFrame([[inner.polygon_id, inner.polygon_name, inner.geometry, inner.height, inner.level] for inner in inners], columns=header)
+        others_gdf = geopandas.GeoDataFrame([[other.polygon_id, other.polygon_name, other.geometry, other.height, other.level] for other in others], columns=header)
+        if outers and inners:
+            outers_gdf_clipped = geopandas.overlay(outers_gdf, inners_gdf, how="difference")
+            relation_result = pandas.concat([relation_result, outers_gdf_clipped])
+        if others:
+            relation_result = pandas.concat([relation_result, others_gdf])
+    logging.info("Extraction completed, start to output file.")
+    # %%
+    relation_result.to_file(f"{output_path}/relation_buildings.geojson", driver="GeoJSON") if DEBUGGING else None
 
-    outers_gdf = geopandas.GeoDataFrame([[outer.polygon_id, outer.polygon_name, outer.geometry, outer.height, outer.level] for outer in outers], columns=header)
-    inners_gdf = geopandas.GeoDataFrame([[inner.polygon_id, inner.polygon_name, inner.geometry, inner.height, inner.level] for inner in inners], columns=header)
-    others_gdf = geopandas.GeoDataFrame([[other.polygon_id, other.polygon_name, other.geometry, other.height, other.level] for other in others], columns=header)
-    if outers and inners:
-        outers_gdf_clipped = geopandas.overlay(outers_gdf, inners_gdf, how="difference")
-        relation_result = pandas.concat([relation_result, outers_gdf_clipped])
-    if others:
-        relation_result = pandas.concat([relation_result, others_gdf])
-
-# %%
-relation_result.to_file("relation_buildings.geojson", driver="GeoJSON")
-
-# %%
-result = pandas.concat([gdf, relation_result])
-result.to_file("buildings.geojson", driver="GeoJSON")
+    # %%
+    result = pandas.concat([gdf, relation_result])
+    result.to_file(f"{output_path}/buildings.geojson", driver="GeoJSON") if DEBUGGING else result.to_csv(f"{output_path}/buildings.tsv", sep="\t")
+    logging.info("Program completed.")

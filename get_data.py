@@ -2,16 +2,18 @@ import logging
 import os
 import traceback
 from datetime import date, datetime
-
 import yaml
-
 import src.lines as lines
 import src.rings as rings
+import src.buildings as buildings
 from argparse import ArgumentParser
 
 from src.enum.hofn_type import HofnType
 from src.enum.mcc import National
 from src.enum.tag import Tag
+
+VERSION = 2
+DEBUG_VERSION = 0
 
 if __name__ == "__main__":
 
@@ -26,7 +28,8 @@ if __name__ == "__main__":
     parser.add_argument("--limit_relation_id", type=str, help="If set, limit relation id will be changed from nation to id set.")
     parser.add_argument("--divide", type=str, help="format: id1, id2, id3 ...", nargs="+")
     parser.add_argument("--tags", type=str, help="format: tag_name1 search_value1 tag_name2 search_value2 ...", nargs="+")
-    parser.add_argument("--debug", const=True, default=False, nargs="?")  # Set as a flag
+    parser.add_argument("--debug", const=True, default=False, nargs="?", help="ONLY generate geojson file")  # Set as a flag
+    parser.add_argument("--all_offline", const=True, default=True, nargs="?", help="DEFAULT true, but cost more time, False will using overpy to get data")  # Set as a flag
     args = parser.parse_args()
     input_path = args.input
     nation = National.get_country_by_mcc(args.mcc)
@@ -52,10 +55,10 @@ if __name__ == "__main__":
 
     # config
     DEBUGGING = True if args.debug else False
+    ALL_OFFLINE = True if args.all_offline else False
     # mode
-    rings_mode = ["water", "village", "building"]
+    rings_mode = ["water", "village"]
     lines_mode = ["coastline", "highway", "ferry", "tunnel", "subway", "railway"]
-    building = ["building"]
     # road LEVEL_DICT
     highways_type = ["motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential"]
     highways_level = dict(zip(highways_type, ["1", "2", "3", "4", "5", "6", "7"]))
@@ -88,9 +91,11 @@ if __name__ == "__main__":
     logging.info("--------------------------------------------")
 
     if mode in rings_mode:
-        rings.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, mode=mode, tags=tags, DEBUGGING=DEBUGGING)
+        rings.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, mode=mode, tags=tags, DEBUGGING=DEBUGGING, ALL_OFFLINE=ALL_OFFLINE)
     elif mode in lines_mode:
         if mode == "highway":
-            lines.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, mode=mode, tags=tags, DIVIDE=divide, LEVEL_DICT=highways_level, DEBUGGING=DEBUGGING)
+            lines.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, mode=mode, tags=tags, DIVIDE=divide, LEVEL_DICT=highways_level, DEBUGGING=DEBUGGING, ALL_OFFLINE=ALL_OFFLINE)
         else:
-            lines.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, mode=mode, tags=tags, DIVIDE=divide, DEBUGGING=DEBUGGING)
+            lines.main(input_path=input_path, output_path=output_path, nation=nation, limit_relation_id=limit_relation_id, mode=mode, tags=tags, DIVIDE=divide, DEBUGGING=DEBUGGING, ALL_OFFLINE=ALL_OFFLINE)
+    elif mode == "building":
+        buildings.main(input_path, output_path, nation, limit_relation_id, DEBUGGING, ALL_OFFLINE)

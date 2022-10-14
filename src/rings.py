@@ -78,7 +78,7 @@ class RingHandler(osmium.SimpleHandler):
 ##################################################################
 
 # %%
-def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGING=False):
+def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGING=False, ALL_OFFLINE=True):
     IS_VILLAGE = True if mode == "village" else False
     IS_WATER = True if mode == "water" else False
     island_output_path = f"data/output/island/{nation}"
@@ -101,8 +101,11 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
     way_rings = geopandas.GeoDataFrame(area_handler.way_rings)
     # Prepare data and free memory
     del area_handler
-    # limit_area = get_relation_polygon_with_overpy(limit_relation_id)
-    limit_area = get_limit_relation_geom(input_path, limit_relation_id)
+    if ALL_OFFLINE:
+        limit_area = get_limit_relation_geom(input_path, limit_relation_id)
+    else:
+        limit_area = get_relation_polygon_with_overpy(limit_relation_id)
+
     way_rings = prepare_data(way_rings, limit_area.wkt)
 
     relation_member_dict: Dict = get_relation_member_data(relation_dict, way_dict, tags=["outer", "inner", ""])
@@ -154,7 +157,7 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
             islands.to_csv(f"{island_output_path}/island.tsv", sep="\t", index=False)
 
     remove_id_list = []
-    rings = geopandas.GeoDataFrame(relation_result, geometry="geometry")
+    rings = geopandas.GeoDataFrame(relation_result)
     rings = pandas.concat([rings, way_rings])
     rings["geometry"] = rings.apply(lambda row: polygonize_with_try_catch(row, remove_id_list), axis=1)
     rings = rings[~rings["POLYGON_ID"].isin(remove_id_list)]

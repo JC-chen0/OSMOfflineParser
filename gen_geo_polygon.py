@@ -8,6 +8,9 @@ from src.enum.hofn_type import HofnType
 from src.enum.mcc import National
 import pandas
 
+VERSION = 2
+DEBUG_VERSION = 0
+
 if __name__ == "__main__":
 
     parser = ArgumentParser()

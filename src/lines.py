@@ -32,9 +32,7 @@ class LineHandler(osmium.SimpleHandler):
     def way(self, w):
         line_id = w.id
         line_name = w.tags.get("name") if w.tags.get("name") else "UNKNOWN"
-        if any([w.tags.get(key) in value
-                if type(value) == list else w.tags.get(key) == value
-                if value != "" else w.tags.get("key")
+        if any([w.tags.get(key) in value if type(value) == list else w.tags.get(key) == value if value != "" else w.tags.get("key")
                 for key, value in self.tags.items()]):
             line = wkt.loads(wkt_factory.create_linestring(w))
             level = self.level.get(w.tags.get(self.mode), False) if self.level else 0  # For LEVEL_DICT-need way
@@ -52,7 +50,7 @@ class LineHandler(osmium.SimpleHandler):
         attributes["ROAD_LEVEL"].append(level)
 
 
-def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGING=False, DIVIDE=None, LEVEL_DICT=None):
+def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGING=False, DIVIDE=None, LEVEL_DICT=None, ALL_OFFLINE=True):
     IS_LEVEL = True if LEVEL_DICT else False
     IS_RING = True if mode in ["coastline"] else False
     IS_FERRY = True if mode in ["ferry"] else False
@@ -68,10 +66,14 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
         del line_handler
 
         line_df.to_file(f"{output_path}/unmerged.geojson", driver="GeoJSON", index=False, encoding="utf-8")
+
         # Offline but cost more time
-        territorial_geom = get_limit_relation_geom(input_path, limit_relation_id)
-        # Online, cost api loads
-        # territorial_geom = get_relation_polygon_with_overpy(limit_relation_id)
+        if ALL_OFFLINE:
+            territorial_geom = get_relation_polygon_with_overpy(limit_relation_id)
+        else:  # Online, cost api loads
+            # territorial_geom = get_relation_polygon_with_overpy(limit_relation_id)
+            territorial_geom = get_limit_relation_geom(input_path, limit_relation_id)
+
         tmp = geopandas.read_file(f"{output_path}/unmerged.geojson")
         data = prepare_data(tmp, territorial_geom.wkt)
         ###############################################################################################
