@@ -1,6 +1,7 @@
 import logging.config
 import logging
 import math
+import multiprocessing
 import sys
 import time
 import traceback
@@ -8,16 +9,16 @@ import os
 import geopandas
 import osmium
 import pandas
-from copy import deepcopy
 from shapely import wkt, ops
 from src.enum.hofn_type import HofnType
 from src.util.limit_area import get_relation_polygon_with_overpy, prepare_data, get_limit_relation_geom
 from src.util.merging_utils import filter_small_island, lonlat_length_in_km, get_merged_and_divided_by_threshold, is_reverse_needed, reverse_linestring_coords, \
-    is_continuous, linemerge_by_wkt
+    is_continuous, linemerge_by_wkt, merged_level_roads
 from src.enum.tag import Tag
 
 # %%
 wkt_factory = osmium.geom.WKTFactory()
+cpu_count = multiprocessing.cpu_count() if multiprocessing.cpu_count() < 20 else 20
 
 
 class LineHandler(osmium.SimpleHandler):
@@ -83,41 +84,10 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
         levels = Tag.get_levels(mode, LEVEL_DICT) if IS_LEVEL else [0]
         unmergeds = [data[data["ROAD_LEVEL"] == level] for level in levels]
         result = dict()
-
-        for unmerged in unmergeds:
-            logging.info(f"Start process level = {unmerged.iloc[0]['ROAD_LEVEL']}")
-            unmerged_in_current_level: dict = unmerged.set_index(unmerged["POLYGON_ID"]).to_dict('index')
-            unmerged_values = list(unmerged_in_current_level.values())
-
-            i = len(unmerged_values) - 1
-            j = i - 1
-            while len(unmerged_values) > 0:
-                mainline = unmerged_values[i]["geometry"]
-                candidate = unmerged_values[j]["geometry"]
-                if is_reverse_needed(mainline, candidate):
-                    candidate = reverse_linestring_coords(candidate)
-                if is_continuous(mainline, candidate):
-                    logging.debug(f"{unmerged_values[i]['POLYGON_ID']} merged with {unmerged_values[j]['POLYGON_ID']}.")
-                    mainline = linemerge_by_wkt(mainline, candidate)
-                    unmerged_values[i]["geometry"] = mainline
-                    unmerged_values.pop(j)
-                    i = len(unmerged_values) - 1
-
-                    j = i - 1
-                else:
-                    j = j - 1
-
-                if j < 0:
-                    result[f"{unmerged_values[i]['POLYGON_ID']}"] = unmerged_values[i]
-                    unmerged_values.pop(i)
-                    i = len(unmerged_values) - 1
-                    j = i - 1
-                    logging.debug(f"{unmerged_values[i]['POLYGON_ID']} start merge.")
-
-                    if i == 0:
-                        result[f"{unmerged_values[i]['POLYGON_ID']}"] = unmerged_values[i]
-                        unmerged_values.pop(i)
-
+        pool = multiprocessing.Pool(cpu_count)
+        level_roads_result_list = pool.map(merged_level_roads, unmergeds)
+        for level_road in level_roads_result_list:
+            result.update(level_road)
         #############################################################################
         # After merging, we need some operations with difference mode
         # ONLY those linestring being ringed need to filter with area threshold

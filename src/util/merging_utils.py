@@ -5,12 +5,12 @@ import time
 import traceback
 from copy import deepcopy
 from typing import Dict, List
-
 import geopandas
+import overpy
 import pandas
-from shapely.geometry import LineString, Polygon
+import shapely.ops
+from shapely.geometry import LineString, Polygon, Point
 from shapely.ops import linemerge, polygonize
-
 from src.enum.hofn_type import HofnType
 
 
@@ -36,45 +36,46 @@ def lonlat_length_in_km(geom):
     return geom.length * 6371 * math.pi / 180
 
 
-def merge_with_candidates_dict(row, unmerged_ids, result, candidates: dict):
-    # row, unmerged_ids: do traversal and merge
-    # unmerged: final merged result
-    # candidates: merging candidate
-    logging.debug(f"{row['POLYGON_ID']} start merging.")
-    candidates_ids = list(candidates.keys())
-    candidates_values = list(candidates.values())
-    current_merging = row["POLYGON_STR"]
-    # Use reverse traversal to remove merged id
-    i = len(candidates) - 1
-    while i >= 0:
+####################################################################################
 
-        candidate_id = candidates_ids[i]
-        candidate_value = candidates_values[i]
-        candidate_geometry = candidate_value["POLYGON_STR"]
-        if candidate_value["ROAD_LEVEL"] == row["ROAD_LEVEL"]:
-            if is_reverse_needed(current_merging, candidate_geometry):
-                reverse_linestring_coords(candidate_geometry)
-                logging.debug(f"{candidate_id} reversed.")
-            if is_continuous(current_merging, candidate_geometry):
-                current_merging = linemerge_by_wkt(current_merging, candidate_geometry)
-                result[row["POLYGON_ID"]]["POLYGON_STR"] = current_merging
-                logging.debug(f"{row['POLYGON_ID']} merge with {candidate_id}")
-                # Candidate has been merged.
-                candidates_ids.remove(candidate_id)
-                candidates_values.remove(candidate_value)
-                candidates.pop(candidate_id)
 
-                unmerged_ids.remove(candidate_id)
-                result.pop(candidate_id)
+def merged_level_roads(unmerged_level_road):
+    unmerged = unmerged_level_road
+    result = dict()
+    logging.info(f"Start process level = {unmerged.iloc[0]['ROAD_LEVEL']}")
+    unmerged_in_current_level: dict = unmerged.set_index(unmerged["POLYGON_ID"]).to_dict('index')
+    unmerged_values = list(unmerged_in_current_level.values())
 
-                i = len(candidates_ids) - 1
-            else:
-                i -= 1
+    i = len(unmerged_values) - 1
+    j = i - 1
+    while len(unmerged_values) > 0:
+        mainline = unmerged_values[i]["geometry"]
+        candidate = unmerged_values[j]["geometry"]
+        if is_reverse_needed(mainline, candidate):
+            candidate = reverse_linestring_coords(candidate)
+        if is_continuous(mainline, candidate):
+            logging.debug(f"{unmerged_values[i]['POLYGON_ID']} merged with {unmerged_values[j]['POLYGON_ID']}.")
+            mainline = linemerge_by_wkt(mainline, candidate)
+            unmerged_values[i]["geometry"] = mainline
+            unmerged_values.pop(j)
+            i = len(unmerged_values) - 1
+
+            j = i - 1
         else:
-            i -= 1
-    return row
+            j = j - 1
 
-    ####################################################################################
+        if j < 0:
+            result[f"{unmerged_values[i]['POLYGON_ID']}"] = unmerged_values[i]
+            unmerged_values.pop(i)
+            i = len(unmerged_values) - 1
+            j = i - 1
+            if i > 0:
+                logging.debug(f"{unmerged_values[i]['POLYGON_ID']} start merge.")
+
+            if i == 0:
+                result[f"{unmerged_values[i]['POLYGON_ID']}"] = unmerged_values[i]
+                unmerged_values.pop(i)
+    return result
 
 
 def get_merged_and_divided_by_threshold(geometry_dict, dividing_result_dict, tolerance, length_threshold) -> Dict:
@@ -169,7 +170,7 @@ def filter_small_island(merged: dict, area_threshold: int):
 
 #################################################
 # RINGS
-def get_relation_member_data(relation_dict: Dict, way_dict: Dict, tags:list) -> Dict:
+def get_relation_member_data(relation_dict: Dict, way_dict: Dict, tags: list) -> Dict:
     ring_rel_members_dict = {"relation_id": [], "way_id": [], "name": [], "geometry": [], "role": [], "type": []}
 
     for relation_id, members in relation_dict.items():
@@ -214,8 +215,6 @@ def restructure(relation_member_dict):
         else:  # ONLY for debug purpose.
             logging.debug(f"Find way {member.get('way_id')} with invalid role {member.get('role')}.")
     return temp
-
-
 
 
 def inners_extracting(inners: List[Dict], islands: List[Dict]):
@@ -289,7 +288,8 @@ def get_merged_rings(rings: list, polygon_id_used_table: list, mode) -> List[Dic
 
 def polygonize_with_try_catch(row, remove_list):
     try:
-        return Polygon(row["geometry"])
+        return list(shapely.ops.polygonize(row["geometry"]))[0]
+        # return Polygon(row["geometry"])
     except:
         logging.debug(f"{row['POLYGON_ID']} cannot be polygonized, geometry is {row['geometry']}, return origin LINESTRING instead")
         remove_list.append(row['POLYGON_ID'])
@@ -349,4 +349,20 @@ def remove_over_intersection_outer(rings: geopandas.GeoDataFrame) -> geopandas.G
     return extract
 
 
+def get_way_geometry_from_overpy(way_id):
+    api = overpy.Overpass()
+    query_message = f"""[out:json][timeout:25]
+    way({way_id}); 
+                out body;
+                >;
+                out skel qt;
+                """
+    lineStrings = []
+    result = api.query(query_message)
+    for key, way in enumerate(result.ways):
+        linestring_coords = []
+        for node in way.nodes:
+            linestring_coords.append(Point(node.lon, node.lat))
+        lineStrings.append(LineString(linestring_coords))
 
+    return lineStrings

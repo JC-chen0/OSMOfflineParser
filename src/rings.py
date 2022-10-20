@@ -99,12 +99,13 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
     relation_dict = area_handler.relation_dict
     way_dict = area_handler.way_dict
     way_rings = geopandas.GeoDataFrame(area_handler.way_rings)
+    way_rings.to_file(f"{output_path}/way_water.geojson", driver="GeoJSON", encoding = "utf-8")
     # Prepare data and free memory
     del area_handler
-    if ALL_OFFLINE:
-        limit_area = get_limit_relation_geom(input_path, limit_relation_id)
-    else:
-        limit_area = get_relation_polygon_with_overpy(limit_relation_id)
+    # if ALL_OFFLINE:
+    #     limit_area = get_limit_relation_geom(input_path, limit_relation_id)
+    # else:
+    limit_area = get_relation_polygon_with_overpy(limit_relation_id)
 
     way_rings = prepare_data(way_rings, limit_area.wkt)
 
@@ -128,16 +129,21 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
     for relation_id, relation in relation_member_dict.items():
         logging.debug(f"Relation: {relation_id} doing merge.")
 
-        if IS_WATER:
-            inners = relation.get("inner")
-            if inners:
-                inners = get_merged_rings(inners, polygon_id_used_table, "island")
-                inners_extracting(inners, islands)
+        if relation_id == 9835755:
+            print("")
 
         outers = relation.get("outer")
         if outers:
             outers = get_merged_rings(outers, polygon_id_used_table, mode)
             relation_member_dict[relation_id] = outers
+            for outer in outers:
+                relation_result.append(outer)
+
+        if IS_WATER:
+            inners = relation.get("inner")
+            if inners:
+                inners = get_merged_rings(inners, polygon_id_used_table, "island")
+                inners_extracting(inners, islands)
 
         logging.debug("outer and inner merge process completed.")
     #######################################################################################
@@ -150,11 +156,12 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
         islands = islands[~islands.POLYGON_ID.isin(remove_id_list)]
         logging.debug(f"Remove {remove_id_list}  due to unpolygonizable issue.")
         logging.debug("islands polygonized done")
-        islands = islands.drop(islands[islands.geometry.area * 6371000 * math.pi / 180 * 6371000 * math.pi / 180 < 200 * 200].index)
+        islands = islands[islands.geometry.area * 6371000 * math.pi / 180 * 6371000 * math.pi / 180 > 200 * 200]
         if DEBUGGING:
             islands.to_file(f"{island_output_path}/island.geojson", driver="GeoJSON", encoding="utf-8")
         else:
             islands.to_csv(f"{island_output_path}/island.tsv", sep="\t", index=False)
+            islands.to_file(f"{island_output_path}/island.geojson", driver="GeoJSON", encoding="utf-8")
 
     remove_id_list = []
     rings = geopandas.GeoDataFrame(relation_result)
@@ -163,7 +170,7 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
     rings = rings[~rings["POLYGON_ID"].isin(remove_id_list)]
     logging.debug(f"Remove {remove_id_list}  due to unpolygonizable issue.")
     logging.debug("rings polygonized done.")
-    rings = rings.drop(rings[rings.geometry.area * 6371000 * math.pi / 180 * 6371000 * math.pi / 180 < 200 * 200].index)
+    rings= rings[(rings["geometry"].area * 6371000 * math.pi / 180 * 6371000 * math.pi / 180) > 100*100]
     if IS_VILLAGE:
         # rings = remove_within_outer(rings)
         rings = remove_over_intersection_outer(rings)

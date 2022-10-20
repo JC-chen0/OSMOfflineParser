@@ -6,6 +6,8 @@ class National(Enum):
     Singapore = "525", "536780"
     Saudi_Arabia = "420", "307584"
     Japan = "440", "382313"
+    UAE = "424", "307763"
+    Bosna_Hercegovina = "218", "2528142"
 
     def __init__(self, mcc, relation):
         self.mcc = mcc
