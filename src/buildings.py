@@ -9,8 +9,8 @@ from shapely import wkt
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import polygonize
 from src.enum.tag import Tag
-from src.util.limit_area import get_relation_polygon_with_overpy, get_limit_relation_geom, prepare_data
-from src.util.merging_utils import get_relation_member_data, get_merged_rings
+from src.util.limit_area import LimitAreaUtils
+from src.util.merging_utils import RingUtils
 
 wktfab = osmium.geom.WKTFactory()
 
@@ -100,9 +100,9 @@ def main(input_path, output_path, nation, limit_relation_id, DEBUGGING=False, AL
     start_time = time.time()
     logging.info("[1/2] Getting data from .osm.pbf . ")
     if ALL_OFFLINE:
-        limit_area = get_limit_relation_geom(input_path, limit_relation_id)
+        limit_area = LimitAreaUtils.get_limit_relation_geom(input_path, limit_relation_id)
     else:
-        limit_area = get_relation_polygon_with_overpy(limit_relation_id)
+        limit_area = LimitAreaUtils.get_relation_polygon_with_overpy(limit_relation_id)
 
     building_handler = BuildingHandler(Tag["building"].value)
     building_handler.apply_file(input_path, idx="flex_mem", locations=True)
@@ -122,7 +122,7 @@ def main(input_path, output_path, nation, limit_relation_id, DEBUGGING=False, AL
     logging.info("[2/2] Extract inner from outer and get all the part and outline as polygons.")
     relation_member_dict = get_relation_member_data_building(relation_dict=relation_dict, way_dict=way_dict, tags=["outer", "inner", "", "outline", "part"])
     relation_member_data: geopandas.GeoDataFrame = geopandas.GeoDataFrame(relation_member_dict)
-    relation_member_data = prepare_data(relation_member_data, limit_area.wkt)
+    relation_member_data = LimitAreaUtils.prepare_data(relation_member_data, limit_area.wkt)
     relation_member_dict = relation_member_data.to_dict("index")
 
     # %%

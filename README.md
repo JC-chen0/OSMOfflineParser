@@ -39,23 +39,20 @@ optional arguments:
   --debug [DEBUG]       ONLY generate geojson file
   --all_offline [ALL_OFFLINE]
                         DEFAULT true, but cost more time, False will using
-                        overpy to get data
-```
+                        overpy to get data```
 
 ### gen_geo_polygon
 
 ```shell=
-usage: gen_geo_polygon.py [-h] [--hofn_types HOFN_TYPES [HOFN_TYPES ...]]
-                          [--get_data [GET_DATA]]
-                          mcc
+usage: gen_geo_polygon.py [-h] [--get_data [GET_DATA]] mcc hofn_types
 
 positional arguments:
   mcc                   mcc
+  hofn_types            format: 'HofnType1 HofnType2' ...
 
 optional arguments:
   -h, --help            show this help message and exit
-  --hofn_types HOFN_TYPES [HOFN_TYPES ...]
-                        format: HofnType1 HofnType2 ...
+  --get_data [GET_DATA]
 ```
 
 ## Refer:

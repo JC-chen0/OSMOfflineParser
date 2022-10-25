@@ -1,13 +1,22 @@
 from enum import Enum
 
+import yaml
+
+national_config = dict()
+try:
+    with open('config.yaml', 'r') as stream:
+        national_config = yaml.safe_load(stream).get("national")
+except:
+    pass
+
 
 class National(Enum):
-    Taiwan = "466", "449220"
-    Singapore = "525", "536780"
-    Saudi_Arabia = "420", "307584"
-    Japan = "440", "382313"
-    UAE = "424", "307763"
-    Bosna_Hercegovina = "218", "2528142"
+    Taiwan = national_config.get("Taiwan").get("mcc"), national_config.get("Taiwan").get("relation")
+    Singapore = national_config.get("Singapore").get("mcc"), national_config.get("Singapore").get("relation")
+    Japan = national_config.get("Japan").get("mcc"), national_config.get("Japan").get("relation")
+    UAE = national_config.get("UAE").get("mcc"), national_config.get("UAE").get("relation")
+    Bosna = national_config.get("Bosna").get("mcc"), national_config.get("Bosna").get("relation")
+    Mexico = national_config.get("Mexico").get("mcc"), national_config.get("Mexico").get("relation")
 
     def __init__(self, mcc, relation):
         self.mcc = mcc

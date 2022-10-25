@@ -8,8 +8,7 @@ from shapely import wkt
 import osmium
 from shapely.geometry import Polygon, MultiPolygon, Point, LineString
 from shapely.ops import linemerge, unary_union, polygonize
-
-from src.util.merging_utils import get_relation_member_data, restructure, get_merged_rings
+from src.util.merging_utils import RingUtils
 
 wktfab = osmium.geom.WKTFactory()
 
@@ -35,60 +34,63 @@ class LimitRelationAreaHanlder(osmium.SimpleHandler):
         self.way_dict[way.id] = {"id": way.id, "name": way.tags.get("name"), "geometry": way_geometry}
 
 
-def get_limit_relation_geom(filepath, relation_id):
-    handler = LimitRelationAreaHanlder(relation_id)
-    handler.apply_file(filepath, idx="flex_mem", locations=True)
-    way_dict = handler.way_dict
-    relation_dict = handler.relation_dict
-    relation_member_dict = get_relation_member_data(relation_dict=relation_dict, way_dict=way_dict, tags=["outer", "inner", ""])
-    relation_member_data: geopandas.GeoDataFrame = geopandas.GeoDataFrame(relation_member_dict)
-    relation_member_dict = relation_member_data.to_dict("index")
-    relation_member_dict = restructure(relation_member_dict)
-    relation_result = []
-    polygon_id_used_table = []
-    for relation_id, relation in relation_member_dict.items():
-        logging.debug(f"Relation: {relation_id} doing merge.")
+class LimitAreaUtils:
+    @staticmethod
+    def get_limit_relation_geom(filepath, relation_id):
+        handler = LimitRelationAreaHanlder(relation_id)
+        handler.apply_file(filepath, idx="flex_mem", locations=True)
+        way_dict = handler.way_dict
+        relation_dict = handler.relation_dict
+        relation_member_dict = RingUtils.get_relation_member_data(relation_dict=relation_dict, way_dict=way_dict, tags=["outer", "inner", ""])
+        relation_member_data: geopandas.GeoDataFrame = geopandas.GeoDataFrame(relation_member_dict)
+        relation_member_dict = relation_member_data.to_dict("index")
+        relation_member_dict = RingUtils.restructure(relation_member_dict)
+        relation_result = []
+        polygon_id_used_table = []
+        for relation_id, relation in relation_member_dict.items():
+            logging.debug(f"Relation: {relation_id} doing merge.")
 
-        outers = relation.get("outer")
-        if outers:
-            outers = get_merged_rings(outers, polygon_id_used_table, "water")
-            relation_member_dict[relation_id] = outers
-            for outer in outers:
-                relation_result.append(outer)
+            outers = relation.get("outer")
+            if outers:
+                outers = RingUtils.get_merged_rings(outers, polygon_id_used_table, "water")
+                relation_member_dict[relation_id] = outers
+                for outer in outers:
+                    relation_result.append(outer)
 
-    geom = MultiPolygon([Polygon(i.get("geometry")) for i in relation_result])
+        geom = MultiPolygon([Polygon(i.get("geometry")) for i in relation_result])
 
-    logging.debug("Get limit relation area geometry completed.")
-    return geom
+        logging.debug("Get limit relation area geometry completed.")
+        return geom
 
+    @staticmethod
+    def get_relation_polygon_with_overpy(rel_id: str) -> MultiPolygon:
+        api = overpy.Overpass()
+        query_msg = f"""
+        [out:json][timeout:25];
+        rel({rel_id});
+        out body;
+        >;
+        out skel qt; 
+        """
+        result = api.query(query_msg)
+        lineStrings = []
+        for key, way in enumerate(result.ways):
+            linestring_coords = []
+            for node in way.nodes:
+                linestring_coords.append(Point(node.lon, node.lat))
+            lineStrings.append(LineString(linestring_coords))
 
-def get_relation_polygon_with_overpy(rel_id: str) -> MultiPolygon:
-    api = overpy.Overpass()
-    query_msg = f"""
-    [out:json][timeout:25];
-    rel({rel_id});
-    out body;
-    >;
-    out skel qt; 
-    """
-    result = api.query(query_msg)
-    lineStrings = []
-    for key, way in enumerate(result.ways):
-        linestring_coords = []
-        for node in way.nodes:
-            linestring_coords.append(Point(node.lon, node.lat))
-        lineStrings.append(LineString(linestring_coords))
+        merged = linemerge([*lineStrings])
+        borders = unary_union(merged)
+        polygons = MultiPolygon(list(polygonize(borders)))
+        return polygons
 
-    merged = linemerge([*lineStrings])
-    borders = unary_union(merged)
-    polygons = MultiPolygon(list(polygonize(borders)))
-    return polygons
-
-
-def prepare_data(data_df: GeoDataFrame, intersection_polygon_wkt: str) -> GeoDataFrame:
-    geometries = data_df["geometry"]
-    polygon = wkt.loads(intersection_polygon_wkt)
-    data_df["in_polygon"] = geometries.intersects(polygon)
-    data_df = data_df[data_df["in_polygon"]]
-    del data_df["in_polygon"]
-    return data_df
+    @staticmethod
+    def prepare_data(data_df: GeoDataFrame, intersection_polygon_wkt: str) -> GeoDataFrame:
+        geometries = data_df["geometry"]
+        polygon = wkt.loads(intersection_polygon_wkt)
+        data_df["in_polygon"] = geometries.intersects(polygon)
+        logging.debug("Intersects completed.")
+        data_df = data_df[data_df["in_polygon"]]
+        del data_df["in_polygon"]
+        return data_df

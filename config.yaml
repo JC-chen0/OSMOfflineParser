@@ -1,0 +1,87 @@
+# LOGIC CONFIG
+tags:
+  water:
+    natural: water
+    landuse: reservoir
+    waterway: riverbank
+  village:
+    landuse: residential
+    place: village
+  coastline:
+    natural: coastline
+  tunnel:
+    highway: tunnel
+    railway: tunnel
+  highway:
+#    highway: [ motorway, trunk, primary ]
+    highway: [ motorway, trunk, primary, secondary, tertiary ]
+  railway:
+    railway: rail
+    route: [ railway, train ]
+  ferry:
+    route: ferry
+  building:
+    building: ""
+    type:
+      building
+
+HofnType:
+  water: "1"
+  coastline: "2"
+  underground_mrt: "3"
+  bridge: "4"
+  island: "5"
+  tunnel: "6"
+  highway: "7"
+  highway_in_desert: "8"
+  building: "9"
+  indoor_building_not_osm: "9.1"
+  ferry: "10"
+  village: "11"
+  forest: "13"
+  field: "13"
+  railway: "14"
+  funicular: "15"
+
+national:
+  Taiwan:
+    mcc: "466"
+    relation: "449220"
+  Singapore:
+    mcc: "525"
+    relation: "536780"
+  Japan:
+    mcc: "440"
+    relation: "382313"
+  UAE:
+    mcc: "424"
+    relation: "307763"
+  Bosna:
+    mcc: "218"
+    relation: "2528142"
+  Mexico:
+    mcc: "334"
+    relation: "114686"
+
+highways:
+  motorway: "1"
+  trunk: "2"
+  primary: "3"
+  secondary: "4"
+  tertiary: "5"
+  unclassified: "6"
+  residential: "7"
+
+
+mode:
+  rings: [ "water", "village" ]
+  lines: [ "coastline", "highway", "ferry", "tunnel", "subway", "railway" ]
+
+
+####################################
+# PROGRAM CONFIG
+path:
+  output: ./data/output
+  log: logs
+debug: False # ONLY generate geojson file, not overwrite tsv.
+all_offline: False

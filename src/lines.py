@@ -11,9 +11,8 @@ import osmium
 import pandas
 from shapely import wkt, ops
 from src.enum.hofn_type import HofnType
-from src.util.limit_area import get_relation_polygon_with_overpy, prepare_data, get_limit_relation_geom
-from src.util.merging_utils import filter_small_island, lonlat_length_in_km, get_merged_and_divided_by_threshold, is_reverse_needed, reverse_linestring_coords, \
-    is_continuous, linemerge_by_wkt, merged_level_roads
+from src.util.limit_area import LimitAreaUtils
+from src.util.merging_utils import LineUtils
 from src.enum.tag import Tag
 
 # %%
@@ -68,15 +67,15 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
 
         line_df.to_file(f"{output_path}/unmerged.geojson", driver="GeoJSON", index=False, encoding="utf-8")
 
-        # Offline but cost more time
         if ALL_OFFLINE:
-            territorial_geom = get_relation_polygon_with_overpy(limit_relation_id)
-        else:  # Online, cost api loads
-            # territorial_geom = get_relation_polygon_with_overpy(limit_relation_id)
-            territorial_geom = get_limit_relation_geom(input_path, limit_relation_id)
-
+            logging.debug("Detect all offline mode on, using offline file to load limit area")
+            limit_area = LimitAreaUtils.get_limit_relation_geom(input_path, limit_relation_id)
+        else:
+            logging.debug("Detect all offline mode off, using api to load limit area")
+            limit_area = LimitAreaUtils.get_relation_polygon_with_overpy(limit_relation_id)
+        logging.debug("Load limit area geometry completed. Start intersection.")
         tmp = geopandas.read_file(f"{output_path}/unmerged.geojson")
-        data = prepare_data(tmp, territorial_geom.wkt)
+        data = LimitAreaUtils.prepare_data(tmp, limit_area.wkt)
         ###############################################################################################
         # 2. MERGE ALL LINE
         logging.info("[2/2] Merge all the line.")
@@ -85,7 +84,7 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
         unmergeds = [data[data["ROAD_LEVEL"] == level] for level in levels]
         result = dict()
         pool = multiprocessing.Pool(cpu_count)
-        level_roads_result_list = pool.map(merged_level_roads, unmergeds)
+        level_roads_result_list = pool.map(LineUtils.merged_level_ways, unmergeds)
         for level_road in level_roads_result_list:
             result.update(level_road)
         #############################################################################
@@ -93,7 +92,7 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
         # ONLY those linestring being ringed need to filter with area threshold
         merged = geopandas.GeoDataFrame.from_dict(result, orient="index")
         if IS_RING:
-            result = filter_small_island(result, area_threshold=40000)
+            result = LineUtils.filter_small_island(result, area_threshold=40000)
         if IS_FERRY:
             merged["geometry"] = merged.geometry.apply(lambda geometry: geometry.buffer(15 / 6371000 / math.pi * 180))
         merged.to_file(f"{output_path}/merged.geojson", driver="GeoJSON", index=False, encoding="utf-8")
@@ -115,13 +114,16 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
         merged_dict = dict()
         # Divide all the lengthy (LENGTH >600km) geometry
         logging.debug("Start re-merge and DIVIDE.")
+
+        tmp = geopandas.read_file(f"{output_path}/unmerged.geojson")
+
         for lengthy_id in lengthy_geometry_ids:
             logging.debug(f"{lengthy_id} is being re-merged and divided.")
             lengthy_wkt = list(merged.loc[merged["POLYGON_ID"] == int(lengthy_id)]["geometry"])[0].wkt
-            tmp = geopandas.read_file(f"{output_path}/unmerged.geojson")
-            lengthy = prepare_data(tmp, lengthy_wkt)
+            lengthy = LimitAreaUtils.prepare_data(tmp, lengthy_wkt)
+            logging.debug("Prepare completed. Start merge.")
             lengthy_dict = lengthy.set_index(lengthy["POLYGON_ID"]).to_dict('index')
-            lengthy_merged_result = get_merged_and_divided_by_threshold(lengthy_dict, divide_result_dict, 60.0, 100.0)
+            lengthy_merged_result = LineUtils.get_merged_and_divided(lengthy_dict, divide_result_dict, 60.0, 100.0)
             merged_dict[lengthy_id] = lengthy_merged_result
 
         # concat into merged
