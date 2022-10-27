@@ -1,5 +1,6 @@
 import logging
 import math
+import multiprocessing
 import os
 import time
 import traceback
@@ -7,6 +8,7 @@ from copy import deepcopy
 from itertools import islice
 from typing import Dict, List
 import geopandas
+import numpy
 import overpy
 import pandas
 import shapely.ops
@@ -24,7 +26,7 @@ def reverse_linestring_coords(geometry):
 def is_continuous(line1, line2):
     head, tail = line1.coords[0], line1.coords[-1]
     compare_head, compare_tail = line2.coords[0], line2.coords[-1]
-    return (head == compare_tail or tail == compare_head) and line1 != line2
+    return head == compare_tail or tail == compare_head
 
 
 def is_reverse_needed(line1, line2):
@@ -47,14 +49,20 @@ def linemerge_by_wkt(line1, line2) -> LineString:
     new_linestring = LineString(coords)
     return new_linestring
 
+def brute_force_merge(line1,line2,from_tail=True) -> LineString:
+    line1_coords = line1.coords[:]
+    line2_coords = line2.coords[:]
+    line1_coords.pop(-1) if from_tail else line2_coords.pop(-1)
+    line1_coords.extend(line2_coords) if from_tail else line2_coords.extend(line1_coords)
+    new_linestring = LineString(line1_coords)
+    return new_linestring
 
 class LineUtils:
 
     @staticmethod
-    def merged_level_ways(unmerged_level_road):
+    def merged_current_level_ways(unmerged_level_road):
         unmerged = unmerged_level_road
-        result = dict()
-        logging.info(f"Start process level = {unmerged.iloc[0]['ROAD_LEVEL']}")
+        result = []
         unmerged_in_current_level: dict = unmerged.set_index(unmerged["POLYGON_ID"]).to_dict('index')
         unmerged_values = list(unmerged_in_current_level.values())
 
@@ -77,7 +85,7 @@ class LineUtils:
                 j = j - 1
 
             if j < 0:
-                result[f"{unmerged_values[i]['POLYGON_ID']}"] = unmerged_values[i]
+                result.append(unmerged_values[i])
                 unmerged_values.pop(i)
                 i = len(unmerged_values) - 1
                 j = i - 1
@@ -85,28 +93,27 @@ class LineUtils:
                     logging.debug(f"{unmerged_values[i]['POLYGON_ID']} start merge.")
 
                 if i == 0:
-                    result[f"{unmerged_values[i]['POLYGON_ID']}"] = unmerged_values[i]
+                    result.append(unmerged_values[i])
                     unmerged_values.pop(i)
         return result
 
     @staticmethod
-    def get_merged_and_divided(geometry_dict, origin_line, tolerance, length_threshold):
-        result = dict()
+    def get_merged_and_divided(geometry_dict, origin_line, length_threshold):
         unmerged_keys = list(geometry_dict.keys())
         unmerged_values = list(geometry_dict.values())
+        start_geometry = NotImplemented
         # Find start id and geometry
-        count = 0
         for i in unmerged_values:
-            count += 1
-            if i.intersects(Point(origin_line.coords[0])):
-                start_line = i
+            # TODO: Check if generate from offline also need buffer or not
+            if i["geometry"].intersects(Point(origin_line.coords[0]).buffer(0.00001)):
+                start_geometry = i
                 break
-        unmerged_values.remove(start_line)
-        unmerged_values.append(start_line)
+        unmerged_values.remove(start_geometry)
+        unmerged_values.append(start_geometry)
 
         i = len(unmerged_values) - 1
         j = i - 1
-        meet_limit_count = 0
+        merged_result = []
         while len(unmerged_values) > 0:
             mainline = unmerged_values[i]["geometry"]
             candidate = unmerged_values[j]["geometry"]
@@ -114,47 +121,91 @@ class LineUtils:
                 candidate = reverse_linestring_coords(candidate)
             if is_continuous(mainline, candidate):
                 logging.debug(f"{unmerged_values[i]['POLYGON_ID']} merged with {unmerged_values[j]['POLYGON_ID']}.")
-                if linemerge_by_wkt(mainline, candidate).length * 6371 * math.pi / 180 > length_threshold:
-                    unmerged_values[i]["geometry"] = mainline
-                    meet_limit_count += 1
+                if linemerge_by_wkt(mainline, candidate).length * 6371 * math.pi / 180 > length_threshold and mainline.length * 6371 * math.pi / 180 > 80:
+                    logging.debug(f"{unmerged_values[i]['POLYGON_ID']} meet length threshold, using {unmerged_values[j]['POLYGON_ID']} start.")
+                    # append meet threshold geometry and pop.
+                    merged_result.append(unmerged_values[i])
+                    unmerged_values.pop(i)
+                    # Using next candidate start.
+                    tmp = unmerged_values[j]
+                    unmerged_values.remove(tmp)
+                    unmerged_values.append(tmp)
                 else:
                     mainline = linemerge_by_wkt(mainline, candidate)
                     unmerged_values[i]["geometry"] = mainline
                     unmerged_values.pop(j)
                 # reset
-                i = len(unmerged_values) - 1 - meet_limit_count
+                i = len(unmerged_values) - 1
                 j = i - 1
             else:
                 j = j - 1
 
+            # no more line can be linked.
             if j < 0:
-                result[f"{unmerged_values[i]['POLYGON_ID']}"] = unmerged_values[i]
+                merged_result.append(unmerged_values[i])
                 unmerged_values.pop(i)
                 i = len(unmerged_values) - 1
                 j = i - 1
                 if i > 0:
                     logging.debug(f"{unmerged_values[i]['POLYGON_ID']} start merge.")
-
+                # Stop merging process and append last segment.
                 if i == 0:
-                    result[f"{unmerged_values[i]['POLYGON_ID']}"] = unmerged_values[i]
+                    merged_result.append(unmerged_values[i])
                     unmerged_values.pop(i)
-        return result
-
-
+        return merged_result
 
     @staticmethod
-    def filter_small_island(merged: dict, area_threshold: int):
+    def merge_level_ways(unmergeds, cpu_count):
+
+        def mp_merged(data_gdfs, using_cpu_count):
+            pool = multiprocessing.Pool(using_cpu_count)
+            tmp_results = pool.map(LineUtils.merged_current_level_ways, data_gdfs)
+            pool.close()
+            return tmp_results
+
+        result = []
+        for unmerged in unmergeds:
+            using_cpu_count = cpu_count
+            unmerged_gdfs = numpy.array_split(unmerged, using_cpu_count)
+            unmerged_list = NotImplemented
+            while using_cpu_count > 0 :
+                logging.info(f"Current working -> LEVEL: {unmerged_gdfs[0].iloc[0]['ROAD_LEVEL']}, WAITING FOR MERGE COUNTS: {using_cpu_count}")
+                unmerged_list = mp_merged(unmerged_gdfs, using_cpu_count)
+                
+                if using_cpu_count != 1:
+                # merge
+                    unmerged_gdfs = [geopandas.GeoDataFrame(unmerged_list[i] + unmerged_list[i + 1]) for i in range(0, len(unmerged_list) - 1, 2)]
+                # Check if lost the last dataframe
+                    if len(unmerged_list) % 2 == 1:
+                        unmerged_gdfs[-1] = pandas.concat([unmerged_gdfs[-1], geopandas.GeoDataFrame(unmerged_list[-1])])
+                    
+                    using_cpu_count = len(unmerged_gdfs)
+                else:
+                    using_cpu_count = 0
+            logging.info(f"LEVEL {unmerged_gdfs[0].iloc[0]['ROAD_LEVEL']} merged completed.")
+            result += unmerged_list[0]
+        logging.info("Merge done.")
+        return result
+
+    @staticmethod
+    def filter_small_island(merged, area_threshold: int):
         #  filter the small island, where there is no people
         filtered = merged
         small_island_list = []
-        for key, values in merged.items():
+        index = 0
+        for values in merged:
+            key = values["POLYGON_ID"]
+            geometry = values["geometry"]
             try:
-                geometry = values["geometry"]
                 if list(polygonize(geometry))[0].area * 6371000 * math.pi / 180 * 6371000 * math.pi / 180 < area_threshold:
-                    small_island_list.append(key)
+                    small_island_list.append(index)
             except:
                 logging.debug(f"POLYGON_ID: {key} cannot be polygonized.")
-        [filtered.pop(key) for key in small_island_list]
+            finally:
+                index += 1
+
+        for index in sorted(small_island_list, reverse=True):
+            filtered.pop(index)
         return filtered
 
     @staticmethod
@@ -175,6 +226,15 @@ class LineUtils:
             lineStrings.append(LineString(linestring_coords))
 
         return lineStrings
+
+    @staticmethod
+    def polygonize_with_try_catch(row, remove_list):
+        try:
+            return list(shapely.ops.polygonize(row["geometry"]))[0]
+        except:
+            logging.debug(f"{row['POLYGON_ID']} cannot be polygonized, geometry is {row['geometry']}, return origin LINESTRING instead")
+            remove_list.append(row['POLYGON_ID'])
+            return row["geometry"]
 
 
 #################################################
@@ -309,36 +369,6 @@ class RingUtils:
             return row["geometry"]
 
     @staticmethod
-    def remove_over_intersection_outer(rings: geopandas.GeoDataFrame) -> geopandas.GeoDataFrame:
-        def is_over_intersect(row, compare: geopandas.GeoSeries, current_index):
-            try:
-                geometry = row["geometry"]
-                polygons = compare.drop(current_index)
-                intersects = polygons.intersects(geometry)
-                if True in list(intersects):
-                    true_indexes = [i for i, x in intersects.iteritems() if x]
-                    for index in true_indexes:
-                        intersect_polygon = geometry.difference(polygons[index])
-                        cover_percentage = (intersect_polygon.area / geometry.area) * 100
-                        if cover_percentage < 3:
-                            print(f"{row['POLYGON_ID']} will be removed due to over_intersection")
-                            return 1
-                return 0
-            except:
-                logging.debug(f"{row['POLYGON_ID']} cannot do intersect.")
-                traceback.print_exc()
-
-        start_time = time.time()
-        compare = rings["geometry"]
-        rings["over_intersect"] = 0
-        for index, row in rings.iterrows():
-            rings.at[index, "over_intersect"] = is_over_intersect(row, compare, index)
-        extract = rings[rings["over_intersect"] != 1]
-        extract = extract.drop(columns=["over_intersect"])
-        print(f"remove within outer, taking {time.time() - start_time}")
-        return extract
-
-    @staticmethod
     def get_rings_merged_results(relation_member_dict, relation_result, islands, polygon_id_used_table, mode) -> tuple:
         # Outer then inner
         for relation_id, relation in relation_member_dict.items():
@@ -351,6 +381,7 @@ class RingUtils:
                 for outer in outers:
                     relation_result.append(outer)
 
+            # Remove inner as islands.
             if mode == "water":
                 inners = relation.get("inner")
                 if inners:

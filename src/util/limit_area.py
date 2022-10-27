@@ -1,4 +1,5 @@
 import logging
+import math
 from typing import Dict
 
 import geopandas
@@ -87,10 +88,10 @@ class LimitAreaUtils:
 
     @staticmethod
     def prepare_data(data_df: GeoDataFrame, intersection_polygon_wkt: str) -> GeoDataFrame:
-        geometries = data_df["geometry"]
-        polygon = wkt.loads(intersection_polygon_wkt)
-        data_df["in_polygon"] = geometries.intersects(polygon)
-        logging.debug("Intersects completed.")
-        data_df = data_df[data_df["in_polygon"]]
-        del data_df["in_polygon"]
+        intersects_geom = wkt.loads(intersection_polygon_wkt)
+        if intersects_geom.type == "LineString":
+            intersects_geom = intersects_geom.buffer(1/6371000/math.pi*180)
+        intersects_series = geopandas.GeoSeries(intersects_geom)
+        intersects_indices = list(data_df.sindex.query_bulk(intersects_series, predicate="intersects")[1])
+        data_df = data_df.iloc[intersects_indices]
         return data_df

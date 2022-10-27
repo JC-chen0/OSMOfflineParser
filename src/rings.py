@@ -184,10 +184,6 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
 
     rings = rings[(rings["geometry"].area * 6371000 * math.pi / 180 * 6371000 * math.pi / 180) > 200 * 200]
 
-    # TODO: DEBUG
-    if IS_VILLAGE:
-        # rings = remove_within_outer(rings)
-        rings = RingUtils.remove_over_intersection_outer(rings)
 
     if DEBUGGING:
         rings.to_file(f"{output_path}/{mode}.geojson", driver="GeoJSON", encoding="utf-8")

@@ -13,8 +13,8 @@ tags:
     highway: tunnel
     railway: tunnel
   highway:
-#    highway: [ motorway, trunk, primary ]
-    highway: [ motorway, trunk, primary, secondary, tertiary ]
+    highway: [ motorway, trunk, primary ]
+    # highway: [ motorway, trunk, primary, secondary, tertiary ]
   railway:
     railway: rail
     route: [ railway, train ]

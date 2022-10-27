@@ -48,6 +48,9 @@ if __name__ == "__main__":
     if args.version:
         print(f"{VERSION}.{DEBUG_VERSION}")
         exit()
+    
+    
+
     #######################################
     # Loading program arguments
     input_path = args.input
@@ -56,7 +59,7 @@ if __name__ == "__main__":
     divide = args.divide
     hofn_type = args.hofn_type
     mode = HofnType(hofn_type).name
-    output_path = f"{config.get('path').get('output')}/{mode}/{nation}"
+    output_path = f"{config.get('path').get('output')}/{nation}/{mode}"
     if os.path.isdir(output_path) is not True:
         os.makedirs(output_path)
 

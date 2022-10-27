@@ -7,17 +7,19 @@ import time
 import traceback
 import os
 import geopandas
+import numpy
 import osmium
 import pandas
+import shapely.ops
 from shapely import wkt, ops
 from src.enum.hofn_type import HofnType
 from src.util.limit_area import LimitAreaUtils
-from src.util.merging_utils import LineUtils
+from src.util.merging_utils import LineUtils, MPUtils
 from src.enum.tag import Tag
 
 # %%
 wkt_factory = osmium.geom.WKTFactory()
-cpu_count = multiprocessing.cpu_count() if multiprocessing.cpu_count() < 20 else 20
+cpu_count = multiprocessing.cpu_count() - 1 if multiprocessing.cpu_count() < 20 else 20
 
 
 class LineHandler(osmium.SimpleHandler):
@@ -82,22 +84,18 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
         start_time = time.time()
         levels = Tag.get_levels(mode, LEVEL_DICT) if IS_LEVEL else [0]
         unmergeds = [data[data["ROAD_LEVEL"] == level] for level in levels]
-        result = dict()
-        pool = multiprocessing.Pool(cpu_count)
-        level_roads_result_list = pool.map(LineUtils.merged_level_ways, unmergeds)
-        for level_road in level_roads_result_list:
-            result.update(level_road)
+        result = LineUtils.merge_level_ways(unmergeds, cpu_count)
         #############################################################################
         # After merging, we need some operations with difference mode
         # ONLY those linestring being ringed need to filter with area threshold
-        merged = geopandas.GeoDataFrame.from_dict(result, orient="index")
         if IS_RING:
             result = LineUtils.filter_small_island(result, area_threshold=40000)
+        merged = geopandas.GeoDataFrame(result)
         if IS_FERRY:
             merged["geometry"] = merged.geometry.apply(lambda geometry: geometry.buffer(15 / 6371000 / math.pi * 180))
         merged.to_file(f"{output_path}/merged.geojson", driver="GeoJSON", index=False, encoding="utf-8")
 
-        logging.debug(f"Merging completed, taking {time.time() - start_time} seconds")
+        logging.info(f"Merging completed, taking {time.time() - start_time} seconds")
     ###########################################################################################
     # [OPTIONAL] 3. re-merge and DIVIDE
     if DIVIDE:
@@ -111,27 +109,25 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
         divide_result_dict = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'HOFN_TYPE': [], 'ROAD_LEVEL': [], 'geometry': []}
         # Find all the line which length is larger than [user-set] km, DIVIDE it later.
         lengthy_geometry_ids = DIVIDE
-        merged_dict = dict()
+        merged_result = []
         # Divide all the lengthy (LENGTH >600km) geometry
         logging.debug("Start re-merge and DIVIDE.")
 
-        tmp = geopandas.read_file(f"{output_path}/unmerged.geojson")
+        unmerged = geopandas.read_file(f"{output_path}/unmerged.geojson")
 
         for lengthy_id in lengthy_geometry_ids:
             logging.debug(f"{lengthy_id} is being re-merged and divided.")
-            lengthy_wkt = list(merged.loc[merged["POLYGON_ID"] == int(lengthy_id)]["geometry"])[0].wkt
-            lengthy = LimitAreaUtils.prepare_data(tmp, lengthy_wkt)
+            lengthy_geom = list(merged.loc[merged["POLYGON_ID"] == int(lengthy_id)]["geometry"])[0]
+            lengthy = LimitAreaUtils.prepare_data(unmerged, lengthy_geom.wkt)
             logging.debug("Prepare completed. Start merge.")
             lengthy_dict = lengthy.set_index(lengthy["POLYGON_ID"]).to_dict('index')
-            lengthy_merged_result = LineUtils.get_merged_and_divided(lengthy_dict, divide_result_dict, 60.0, 100.0)
-            merged_dict[lengthy_id] = lengthy_merged_result
+            lengthy_merged_result = LineUtils.get_merged_and_divided(lengthy_dict, lengthy_geom, 100.0)
+            merged_result += lengthy_merged_result
 
-        # concat into merged
-        for lengthy_id, lengthy_merged_result in merged_dict.items():
-            # lengthy_merged_result_df = geopandas.GeoDataFrame.from_dict(lengthy_merged_result, orient="index")
-            lengthy_merged_result_df = geopandas.GeoDataFrame(lengthy_merged_result)
-            merged = merged[merged["POLYGON_ID"] != int(lengthy_id)]
-            merged = pandas.concat([lengthy_merged_result_df, merged])
+        merged = merged[~merged["POLYGON_ID"].isin(DIVIDE)]
+        merged = pandas.concat([geopandas.GeoDataFrame(merged_result), merged])
+
+
 
         logging.info("Divide and re-merge completed.")
 
@@ -144,6 +140,5 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
         merged.to_file(f"{output_path}/{mode}.geojson", driver="GeoJSON", encoding="utf-8", index=False)
 
     logging.info("==================================")
-    logging.info("Merging and dividing line process completed")
     logging.info(f"Output file to: {output_path}/{mode}.geojson") if not DEBUGGING else logging.debug(f"Output file to: {output_path}/{mode}.tsv")
     sys.exit(0)

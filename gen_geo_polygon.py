@@ -32,7 +32,7 @@ if __name__ == "__main__":
     nation = National.get_country_by_mcc(mcc)
     hofn_types = args.hofn_types.split()
 
-    files = {hofn_type: pandas.read_csv(f"data/output/{HofnType(hofn_type).name}/{nation}/{HofnType(hofn_type).name}.tsv", sep="\t") for hofn_type in hofn_types}
+    files = {hofn_type: pandas.read_csv(f"data/output/{nation}/{HofnType(hofn_type).name}/{HofnType(hofn_type).name}.tsv", sep="\t") for hofn_type in hofn_types}
     for hofn_type, file in files.items():
         file["geometry"] = file.apply(lambda row: wkt.loads(row["geometry"]), axis=1)
         files[hofn_type] = geopandas.GeoDataFrame(file)
