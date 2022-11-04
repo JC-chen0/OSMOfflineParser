@@ -8,10 +8,8 @@ import pandas
 from shapely import wkt
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import polygonize
-from src.enum.tag import Tag
-from src.util.limit_area import LimitAreaUtils
-from src.util.merging_utils import RingUtils
-
+from src.enum import Tag
+from src.utils import LimitAreaUtils, RingUtils
 wktfab = osmium.geom.WKTFactory()
 
 

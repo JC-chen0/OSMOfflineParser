@@ -1,10 +1,7 @@
 import logging
 import math
 import multiprocessing
-import os
 import time
-import traceback
-from copy import deepcopy
 from itertools import islice
 from typing import Dict, List
 import geopandas
@@ -12,12 +9,16 @@ import numpy
 import overpy
 import pandas
 import shapely.ops
-from shapely.geometry import LineString, Polygon, Point
-from shapely.ops import linemerge, polygonize
-from src.enum.hofn_type import HofnType
+import osmium
+from shapely.geometry import LineString, Polygon, Point, MultiPolygon
+from shapely.ops import linemerge, unary_union, polygonize
+from shapely import wkt
+from src.models import HofnData
+from src.enum import HofnType
 
 
 def reverse_linestring_coords(geometry):
+
     reverse = geometry
     reverse.coords = list(reverse.coords)[::-1]
     return reverse
@@ -59,47 +60,57 @@ def brute_force_merge(line1,line2,from_tail=True) -> LineString:
 
 class LineUtils:
 
-    @staticmethod
-    def merged_current_level_ways(unmerged_level_road):
-        unmerged = unmerged_level_road
-        result = []
-        unmerged_in_current_level: dict = unmerged.set_index(unmerged["POLYGON_ID"]).to_dict('index')
-        unmerged_values = list(unmerged_in_current_level.values())
 
-        i = len(unmerged_values) - 1
-        j = i - 1
-        while len(unmerged_values) > 0:
-            mainline = unmerged_values[i]["geometry"]
-            candidate = unmerged_values[j]["geometry"]
-            if is_reverse_needed(mainline, candidate):
-                candidate = reverse_linestring_coords(candidate)
-            if is_continuous(mainline, candidate):
-                logging.debug(f"{unmerged_values[i]['POLYGON_ID']} merged with {unmerged_values[j]['POLYGON_ID']}.")
-                mainline = linemerge_by_wkt(mainline, candidate)
-                unmerged_values[i]["geometry"] = mainline
-                unmerged_values.pop(j)
-                i = len(unmerged_values) - 1
+    def merge_by_intersects(unmerged_level_roads:geopandas.GeoDataFrame,id_used_list=[]):    
+        unmerged_way = unmerged_level_roads.copy(deep=True) # copy to avoid changing original data, original data will used to check what id is used
+        unmerged_way = unmerged_way.reset_index(drop=True) # reset index for loc issue, sindex intersects will check for labeled index. 
+        result = [] # Generate geodataframe result
+        
+        # Prepare init iteration
+        processing, unmerged_way = unmerged_way.iloc[-1], unmerged_way.iloc[:-1] # pop row to processing
+        index_used_list = [processing.name] # init index used list with init line
+        if unmerged_way.empty: # if unmerged_way is empty, return processing
+            result.append(processing)
+            return result
 
-                j = i - 1
-            else:
-                j = j - 1
 
-            if j < 0:
-                result.append(unmerged_values[i])
-                unmerged_values.pop(i)
-                i = len(unmerged_values) - 1
-                j = i - 1
-                if i > 0:
-                    logging.debug(f"{unmerged_values[i]['POLYGON_ID']} start merge.")
+        while len(unmerged_way) > 0:
+            
+            got_merged = False # Flag to check if line is merged
 
-                if i == 0:
-                    result.append(unmerged_values[i])
-                    unmerged_values.pop(i)
+            possible_matches_index = unmerged_way.sindex.query(processing.geometry, predicate='intersects') # Get a list of labeled index that intersect with processing line
+            precise_matches_index = [i for i in possible_matches_index if i not in index_used_list]
+            precise_matches = unmerged_way.loc[precise_matches_index] # Using labeled index to find precise matches
+            precise_matches = precise_matches.to_dict("index") # convert into dict to apply performance.
+            
+            # Merge the lines that intersect with the processing line
+            for row_index,row in precise_matches.items():
+                row_geometry = row["geometry"]
+                if is_reverse_needed(processing.geometry, row_geometry):
+                    row_geometry = reverse_linestring_coords(row_geometry)
+                if is_continuous(processing.geometry, row_geometry):
+                    processing.geometry = linemerge_by_wkt(processing.geometry, row_geometry)
+
+                    index_used_list.append(row_index)
+                    got_merged = True
+
+            if got_merged: 
+                continue  # If the processing line is merged, continue to the next loop
+            
+            # If the processing line is not merged, add it to the result
+            result.append(processing)   
+            unmerged_way = unmerged_way[~unmerged_way.index.isin(index_used_list)]
+            
+            # If there are lines to process, continue with last element
+            if not unmerged_way.empty:
+                processing, unmerged_way = unmerged_way.iloc[-1], unmerged_way.iloc[:-1] # pop last row to processing
+                index_used_list.append(processing.name)
+
+        id_used_list += list(unmerged_level_roads[~unmerged_level_roads.index.isin(unmerged_way.index)]["POLYGON_ID"].values) # Add the id of the used line to the id_used_list
         return result
-
+            
     @staticmethod
     def get_merged_and_divided(geometry_dict, origin_line, length_threshold):
-        unmerged_keys = list(geometry_dict.keys())
         unmerged_values = list(geometry_dict.values())
         start_geometry = NotImplemented
         # Find start id and geometry
@@ -154,38 +165,6 @@ class LineUtils:
                     unmerged_values.pop(i)
         return merged_result
 
-    @staticmethod
-    def merge_level_ways(unmergeds, cpu_count):
-
-        def mp_merged(data_gdfs, using_cpu_count):
-            pool = multiprocessing.Pool(using_cpu_count)
-            tmp_results = pool.map(LineUtils.merged_current_level_ways, data_gdfs)
-            pool.close()
-            return tmp_results
-
-        result = []
-        for unmerged in unmergeds:
-            using_cpu_count = cpu_count
-            unmerged_gdfs = numpy.array_split(unmerged, using_cpu_count)
-            unmerged_list = NotImplemented
-            while using_cpu_count > 0 :
-                logging.info(f"Current working -> LEVEL: {unmerged_gdfs[0].iloc[0]['ROAD_LEVEL']}, WAITING FOR MERGE COUNTS: {using_cpu_count}")
-                unmerged_list = mp_merged(unmerged_gdfs, using_cpu_count)
-                
-                if using_cpu_count != 1:
-                # merge
-                    unmerged_gdfs = [geopandas.GeoDataFrame(unmerged_list[i] + unmerged_list[i + 1]) for i in range(0, len(unmerged_list) - 1, 2)]
-                # Check if lost the last dataframe
-                    if len(unmerged_list) % 2 == 1:
-                        unmerged_gdfs[-1] = pandas.concat([unmerged_gdfs[-1], geopandas.GeoDataFrame(unmerged_list[-1])])
-                    
-                    using_cpu_count = len(unmerged_gdfs)
-                else:
-                    using_cpu_count = 0
-            logging.info(f"LEVEL {unmerged_gdfs[0].iloc[0]['ROAD_LEVEL']} merged completed.")
-            result += unmerged_list[0]
-        logging.info("Merge done.")
-        return result
 
     @staticmethod
     def filter_small_island(merged, area_threshold: int):
@@ -236,6 +215,24 @@ class LineUtils:
             remove_list.append(row['POLYGON_ID'])
             return row["geometry"]
 
+    @staticmethod
+    def get_relation_data(relation_member, lines_dict):
+        way_from_relations = lines_dict.get(relation_member.id,False)
+        if way_from_relations:
+            return HofnData(way_from_relations["POLYGON_ID"], way_from_relations["POLYGON_NAME"], way_from_relations["HOFN_TYPE"], way_from_relations["ROAD_LEVEL"], way_from_relations["geometry"])
+
+    @staticmethod
+    def get_merged_members(relation_members_df,  levels, id_used_list=[]):
+        original_id_used_list = id_used_list[:]
+        current_id_used_list = original_id_used_list[:]
+        # Get all the line split by level, remove empty levels.
+        relation_members_split_by_level = [relation_members_df[relation_members_df["ROAD_LEVEL"] == level] for level in levels if not relation_members_df[relation_members_df["ROAD_LEVEL"] == level].empty]
+        # Check unmerged line in each level
+        unmerged_relation_members_split_by_level = [relation_members_df[~relation_members_df.POLYGON_ID.isin(current_id_used_list)] for relation_members_df in relation_members_split_by_level] 
+        # Merge those unmerged in each level, remove those empty levels which remain no ununused line.   
+        merged_relation_members = [LineUtils.merge_by_intersects(i, current_id_used_list) for i in unmerged_relation_members_split_by_level if not i.empty] # Merge by intersects
+        id_used_list += list(set(current_id_used_list)-set(original_id_used_list))
+        return sum(merged_relation_members, []) # flatten list
 
 #################################################
 class RingUtils:
@@ -243,35 +240,13 @@ class RingUtils:
     def get_relation_member_data(relation_dict: Dict, way_dict: Dict, tags: list) -> list:
         result = []
         for relation_id, members in relation_dict.items():
-            for member in members:
-                ring_rel_members = {"relation_id": None, "way_id": None, "name": "UNKNOWN", "geometry": None, "role": None, "type": None}
-                # Check if tags is in need. if not then pass.
-                if member.get("role") not in tags:
-                    continue
-                # Using member id from relation dict to search in way dict.
-                way_id = member.get("id")
-                way = way_dict.get(way_id, False)
-                if way is False:
-                    logging.debug(f"{way_id} is None in way_dict")
-                    continue
-
-                role = member.get("role")
-                # Discussed with Sheldon, if member's role is empty, regarded member as outer.
-                if role == "":
-                    role = "outer"
-                    logging.debug(f"{relation_id}: {way_id} has empty role, regarded as OUTER.")
-
-                if way:
-                    ring_rel_members["relation_id"] = relation_id
-                    ring_rel_members["way_id"] = way_id
-                    ring_rel_members["name"] = way.get("name") if way.get("name") else "UNKNOWN"
-                    ring_rel_members["geometry"] = way.get("geometry")
-                    ring_rel_members["role"] = role
-                    ring_rel_members["type"] = member.get("type")
-                    result.append(ring_rel_members)
-                else:
-                    logging.debug(f"{way_id} cannot be found in way dict, please check.")
+            valid_members = [member for member in members if member.role in tags and way_dict.get(member.ref, False)]
+            for member in valid_members:          
+                way = way_dict[member.ref]
+                relation_member = {"relation_id": relation_id, "way_id": way.id, "name": way.name, "geometry": way.geometry, "role": member.role, type: member.type}
+                result.append(relation_member)
         return result
+
 
     @staticmethod
     def restructure(relation_member_dict):
@@ -405,3 +380,90 @@ class MPUtils:
         for i in range(n):
             si = (d + 1) * (i if i < r else r) + d * (0 if i < r else i - r)
             yield l[si:si + (d + 1 if i < r else d)]
+
+
+#####
+wktfab = osmium.geom.WKTFactory()
+
+
+class LimitRelationAreaHanlder(osmium.SimpleHandler):
+    def __init__(self, relation_id):
+        super().__init__()
+        self.way_dict: Dict[Dict] = dict()
+        self.relation_id = relation_id
+        self.relation_dict = dict()
+
+    def relation(self, relation):
+        if relation.id == int(self.relation_id):
+            for member in relation.members:
+                if member.ref in self.way_dict and member.role == "outer" and member.type == "w":
+
+                    if not self.relation_dict.get(relation.id, False):
+                        self.relation_dict[relation.id] = []
+                    self.relation_dict[relation.id].append({"id": member.ref, "role": member.role, "type": member.type})
+
+    def way(self, way):
+        way_geometry = wkt.loads(wktfab.create_linestring(way))
+        self.way_dict[way.id] = {"id": way.id, "name": way.tags.get("name"), "geometry": way_geometry}
+
+
+class LimitAreaUtils:
+    @staticmethod
+    def get_limit_relation_geom(filepath, relation_id):
+        handler = LimitRelationAreaHanlder(relation_id)
+        handler.apply_file(filepath, idx="flex_mem", locations=True)
+        way_dict = handler.way_dict
+        relation_dict = handler.relation_dict
+        relation_member_dict = RingUtils.get_relation_member_data(relation_dict=relation_dict, way_dict=way_dict, tags=["outer", "inner", ""])
+        relation_member_data: geopandas.GeoDataFrame = geopandas.GeoDataFrame(relation_member_dict)
+        relation_member_dict = relation_member_data.to_dict("index")
+        relation_member_dict = RingUtils.restructure(relation_member_dict)
+        relation_result = []
+        polygon_id_used_table = []
+        for relation_id, relation in relation_member_dict.items():
+            logging.debug(f"Relation: {relation_id} doing merge.")
+
+            outers = relation.get("outer")
+            if outers:
+                outers = RingUtils.get_merged_rings(outers, polygon_id_used_table, "water")
+                relation_member_dict[relation_id] = outers
+                for outer in outers:
+                    relation_result.append(outer)
+
+        geom = MultiPolygon([Polygon(i.get("geometry")) for i in relation_result])
+
+        logging.debug("Get limit relation area geometry completed.")
+        return geom
+
+    @staticmethod
+    def get_relation_polygon_with_overpy(rel_id: str) -> MultiPolygon:
+        api = overpy.Overpass()
+        query_msg = f"""
+        [out:json][timeout:25];
+        rel({rel_id});
+        out body;
+        >;
+        out skel qt; 
+        """
+        result = api.query(query_msg)
+        lineStrings = []
+        for key, way in enumerate(result.ways):
+            linestring_coords = []
+            for node in way.nodes:
+                linestring_coords.append(Point(node.lon, node.lat))
+            lineStrings.append(LineString(linestring_coords))
+
+        merged = linemerge([*lineStrings])
+        borders = unary_union(merged)
+        polygons = MultiPolygon(list(polygonize(borders)))
+        return polygons
+
+    @staticmethod
+    def prepare_data(data_df: geopandas.GeoDataFrame, intersection_polygon_wkt: str) -> geopandas.GeoDataFrame:
+        intersects_geom = wkt.loads(intersection_polygon_wkt)
+        if intersects_geom.type == "LineString":
+            intersects_geom = intersects_geom.buffer(1/6371000/math.pi*180)
+        intersects_series = geopandas.GeoSeries(intersects_geom)
+        intersects_indices = list(data_df.sindex.query_bulk(intersects_series, predicate="intersects")[1])
+        data_df = data_df.iloc[intersects_indices]
+        return data_df

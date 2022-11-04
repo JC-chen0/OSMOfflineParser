@@ -2,8 +2,7 @@ from argparse import ArgumentParser
 import geopandas
 import shapely
 from shapely import wkt
-from src.enum.hofn_type import HofnType
-from src.enum.mcc import National
+from src.enum import HofnType, National
 import pandas
 
 VERSION = 3
@@ -11,11 +10,13 @@ DEBUG_VERSION = 0
 
 
 def get_geometry_rounding_limit(file: geopandas.GeoDataFrame):
+    
     data = file.copy(deep=True)
     i = 5  # rounding precision must be larger than 5 for accuracy issue
     while i <= 7:
         data["geometry"] = data.geometry.apply(lambda geometry: wkt.loads(wkt.dumps(geometry, rounding_precision=5)))
-        if all(data["geometry"].is_valid):
+        is_valid = all(data["geometry"].is_valid) if data["geometry"][0].geom_type == "Polygon" else all(data["geometry"].is_simple)
+        if is_valid:
             return i
         else:
             return -1
@@ -92,7 +93,7 @@ if __name__ == "__main__":
         print(f"{hofn_type} pass polygon validation")
         file = file.rename(columns={"geometry": "POLYGON_STR"})
         nt2_geo_polygon = pandas.concat([nt2_geo_polygon, file])
-    nt2_geo_polygon.to_csv("data/output/NT2_GEO_POLYGON.csv", index=False)  # For debug purpose.
-    nt2_geo_polygon.to_csv("data/output/NT2_GEO_POLYGON.tsv", sep="\t", index=False)
+    nt2_geo_polygon.to_csv(f"data/output/{nation}/NT2_GEO_POLYGON.csv", index=False)  # For debug purpose.
+    nt2_geo_polygon.to_csv(f"data/output/{nation}/NT2_GEO_POLYGON.tsv", sep="\t", index=False)
     print("Generate nt2 geo poloygon done.")
     exit()

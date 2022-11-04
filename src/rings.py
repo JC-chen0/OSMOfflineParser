@@ -11,11 +11,11 @@ import logging.config
 import geopandas
 import pandas
 import multiprocessing
-from src.util.merging_utils import RingUtils, MPUtils
-from src.util.limit_area import LimitAreaUtils
+from src.utils import RingUtils, MPUtils, LimitAreaUtils
+from src.models import HofnData, RelationMember, Way
 from typing import Dict, List
 from shapely import wkt, ops
-from src.enum.hofn_type import HofnType
+from src.enum import HofnType
 
 # https://stackoverflow.com/questions/20625582/how-to-deal-with-settingwithcopywarning-in-pandas
 pandas.options.mode.chained_assignment = None  # default='warn'
@@ -28,10 +28,7 @@ class RingHandler(osmium.SimpleHandler):
     def __init__(self, tags, mode):
         super().__init__()
         # from way
-        self.way_rings = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'geometry': [], 'HOFN_TYPE': [], 'ROAD_LEVEL': []}
-        # from rel
-        self.rel_rings = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'geometry': [], 'HOFN_TYPE': [], 'ROAD_LEVEL': []}
-
+        self.way_rings = []
         self.relation_dict: Dict[List[Dict]] = dict()  # RelationID: [{ID,ROLE,TYPE}]
         self.way_dict: Dict[Dict] = dict()
         self.mode = mode
@@ -48,39 +45,28 @@ class RingHandler(osmium.SimpleHandler):
                     if area.from_way():
                         # All area from way is one polygon (len(geometry) == 1)
                         ring_geometry = list(ring_geometry)[0]  # Extract polygon from multipolygon
-                        self.append(self.way_rings, ring_id, ring_name, ring_geometry)
-                    else:
-                        self.append(self.rel_rings, ring_id, ring_name, ring_geometry)
+                        self.way_rings.append(HofnData(self.way_rings, ring_id, ring_name, ring_geometry))
         except:
             pass
 
-    def append(self, rings: dict, id, name, geometry):
-        rings.get("POLYGON_ID").append(id)
-        rings.get("POLYGON_NAME").append(name)
-        rings.get("geometry").append(geometry)
-        rings.get("HOFN_TYPE").append(HofnType[self.mode].value)
-        rings.get("ROAD_LEVEL").append("0")
-
     # Tags: 1. Value 2. list 3. "" (purely take all the tags)
     def relation(self, relation):
-        if any([relation.tags.get(key) in value
-                if type(value) == list else relation.tags.get(key) == value
-        if value != "" else relation.tags.get("key")
-                for key, value in self.tags.items()]):
+        if any([relation.tags.get(key) in value if type(value) == list else relation.tags.get(key) == value if value != "" else relation.tags.get("key") for key, value in self.tags.items()]):
             for member in relation.members:
-                if not self.relation_dict.get(relation.id, False):
-                    self.relation_dict[relation.id] = []
-                self.relation_dict[relation.id].append({"id": member.ref, "role": member.role, "type": member.type})
+                if member.type == "w":
+                    if not self.relation_dict.get(relation.id, False):
+                        self.relation_dict[relation.id] = []
+                    self.relation_dict[relation.id].append(RelationMember(member.ref, member.type, member.role))
 
     def way(self, way):
         way_geometry = wkt.loads(wktfab.create_linestring(way))
         try:
             processed = list(ops.polygonize(way_geometry))[0]
             if processed.area * 6371000 * math.pi / 180 * 6371000 * math.pi / 180 > 200 * 200:
-                self.way_dict[way.id] = {"id": way.id, "name": way.tags.get("name") if way.tags.get("name") else "UNKNOWN", "geometry": way_geometry}
+                self.way_dict[way.id] = Way(way.id, way.tags.get("name") if way.tags.get("name") else "UNKNOWN", way_geometry)
         except:
             # If cannot be polygonized, it should be a slice of linestring, just add to merge it later.
-            self.way_dict[way.id] = {"id": way.id, "name": way.tags.get("name") if way.tags.get("name") else "UNKNOWN", "geometry": way_geometry}
+            self.way_dict[way.id] = Way(way.id, way.tags.get("name") if way.tags.get("name") else "UNKNOWN", way_geometry)
 
 
 ##################################################################
@@ -89,7 +75,7 @@ class RingHandler(osmium.SimpleHandler):
 def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGING=False, ALL_OFFLINE=False):
     IS_VILLAGE = True if mode == "village" else False
     IS_WATER = True if mode == "water" else False
-    island_output_path = f"data/output/island/{nation}"
+    island_output_path = f"data/output/{nation}/island/"
     if not os.path.isdir(island_output_path):
         os.makedirs(island_output_path)
     #######################################################################################
@@ -104,9 +90,10 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
     #######################################################################################
     # 2. Get data prepared
     logging.info(f"[2/4] Preparing data with intersecting with relation id {limit_relation_id}")
+    way_rings = geopandas.GeoDataFrame([vars(i) for i in area_handler.way_rings])
     relation_dict = area_handler.relation_dict
     way_dict = area_handler.way_dict
-    way_rings = geopandas.GeoDataFrame(area_handler.way_rings)
+    
 
     # Prepare data with limit area and free memory
     del area_handler

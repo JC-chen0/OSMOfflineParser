@@ -13,8 +13,9 @@ tags:
     highway: tunnel
     railway: tunnel
   highway:
-    highway: [ motorway, trunk, primary ]
-    # highway: [ motorway, trunk, primary, secondary, tertiary ]
+    # highway: [ motorway, trunk, primary ]
+    highway: [ motorway, trunk, primary, secondary, tertiary ]
+    type: route
   railway:
     railway: rail
     route: [ railway, train ]
@@ -62,6 +63,9 @@ national:
   Mexico:
     mcc: "334"
     relation: "114686"
+  Philippines:
+    mcc: "515"
+    relation: "443174"
 
 highways:
   motorway: "1"
@@ -81,7 +85,10 @@ mode:
 ####################################
 # PROGRAM CONFIG
 path:
+  # output: /data/OSMOfflineParser/output
+  # log: /data/covmo_log/OSMOfflineParser
   output: ./data/output
-  log: logs
+  log: ./logs
 debug: False # ONLY generate geojson file, not overwrite tsv.
 all_offline: False
+

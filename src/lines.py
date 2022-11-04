@@ -1,90 +1,130 @@
+import functools
+import itertools
 import logging.config
 import logging
 import math
 import multiprocessing
 import sys
-import time
 import traceback
 import os
 import geopandas
-import numpy
 import osmium
 import pandas
-import shapely.ops
-from shapely import wkt, ops
-from src.enum.hofn_type import HofnType
-from src.util.limit_area import LimitAreaUtils
-from src.util.merging_utils import LineUtils, MPUtils
-from src.enum.tag import Tag
-
-# %%
+import time
+from shapely import wkt
+from src.utils import LimitAreaUtils, LineUtils
+from src.enum import Tag, HofnType
+from src.models import HofnData, RelationMember
 wkt_factory = osmium.geom.WKTFactory()
 cpu_count = multiprocessing.cpu_count() - 1 if multiprocessing.cpu_count() < 20 else 20
+
 
 
 class LineHandler(osmium.SimpleHandler):
     def __init__(self, tags, mode, level=None):
         super().__init__()
-        self.lines = {'POLYGON_ID': [], 'POLYGON_NAME': [], "HOFN_TYPE": [], "ROAD_LEVEL": [], 'geometry': []}
+        self.lines = []
+        self.relations = dict()
         self.tags = tags
         self.mode = mode
         self.level = level
 
+     # Tags: 1. Value 2. list 3. "" (purely take all the tags)
+    def relation(self, relation):
+        if any([relation.tags.get(key) in value if type(value) == list else relation.tags.get(key) == value if value != "" else relation.tags.get("key") for key, value in self.tags.items()]):
+            for member in relation.members:
+                if member.type == "w":
+                    if not self.relations.get(relation.id, False):
+                        self.relations[relation.id] = []
+                    self.relations[relation.id].append(RelationMember(member.ref, member.type, member.role if member.role != "" else "outer"))
+        
     # Tags: 1. Value 2. list 3. "" (purely take all the tags)
     def way(self, w):
         line_id = w.id
         line_name = w.tags.get("name") if w.tags.get("name") else "UNKNOWN"
-        if any([w.tags.get(key) in value if type(value) == list else w.tags.get(key) == value if value != "" else w.tags.get("key")
-                for key, value in self.tags.items()]):
+        if any([w.tags.get(key) in value if type(value) == list else w.tags.get(key) == value if value != "" else w.tags.get("key") for key, value in self.tags.items()]):
             line = wkt.loads(wkt_factory.create_linestring(w))
             level = self.level.get(w.tags.get(self.mode), False) if self.level else 0  # For LEVEL_DICT-need way
             if level is not False:
                 try:
-                    self.append_line_attribute(self.lines, line_id, line_name, line, level)
+                    self.lines.append(HofnData(line_id, line_name, HofnType[self.mode].value, level, line))
                 except Exception as e:
                     traceback.print_exc()
 
-    def append_line_attribute(self, attributes: dict, line_id: str, name, geometry, level):
-        attributes["POLYGON_ID"].append(line_id)
-        attributes["POLYGON_NAME"].append(name)
-        attributes["geometry"].append(geometry)
-        attributes["HOFN_TYPE"].append(HofnType[self.mode].value)
-        attributes["ROAD_LEVEL"].append(level)
 
 
 def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGING=False, DIVIDE=None, LEVEL_DICT=None, ALL_OFFLINE=True):
     IS_LEVEL = True if LEVEL_DICT else False
     IS_RING = True if mode in ["coastline"] else False
     IS_FERRY = True if mode in ["ferry"] else False
+    levels = Tag.get_levels(mode, LEVEL_DICT) if IS_LEVEL else [0]
     ###############################################################################################
     # 1. GET DATA
     if not DIVIDE:
         logging.info("[1/2] Prepare line data from osm.pbf file.")
         logging.info(f"Reading file from {input_path}")
+        # 1.1. Read osm.pbf file
         line_handler = LineHandler(tags, mode, LEVEL_DICT)
         line_handler.apply_file(input_path, idx="flex_mem", locations=True)
-        line_df = geopandas.GeoDataFrame(line_handler.lines)
-
+        lines = line_handler.lines
+        relation_member_dict = line_handler.relations
         del line_handler
-
-        line_df.to_file(f"{output_path}/unmerged.geojson", driver="GeoJSON", index=False, encoding="utf-8")
-
+        ################################################################################################
+        
+        lines_df = geopandas.GeoDataFrame([vars(i) for i in lines])
+        lines_dict = lines_df.set_index("POLYGON_ID", drop=False).to_dict("index")
+        
+        logging.info("Getting data from relations.")
+        # 1.2. Get limit area
+        logging.info("Loading limit area geometry.")
         if ALL_OFFLINE:
-            logging.debug("Detect all offline mode on, using offline file to load limit area")
+            logging.info("Detect all offline mode on, using offline file to load limit area")
             limit_area = LimitAreaUtils.get_limit_relation_geom(input_path, limit_relation_id)
         else:
-            logging.debug("Detect all offline mode off, using api to load limit area")
+            logging.info("Detect all offline mode off, using api to load limit area")
             limit_area = LimitAreaUtils.get_relation_polygon_with_overpy(limit_relation_id)
-        logging.debug("Load limit area geometry completed. Start intersection.")
-        tmp = geopandas.read_file(f"{output_path}/unmerged.geojson")
-        data = LimitAreaUtils.prepare_data(tmp, limit_area.wkt)
+        
+        
         ###############################################################################################
         # 2. MERGE ALL LINE
         logging.info("[2/2] Merge all the line.")
-        start_time = time.time()
-        levels = Tag.get_levels(mode, LEVEL_DICT) if IS_LEVEL else [0]
-        unmergeds = [data[data["ROAD_LEVEL"] == level] for level in levels]
-        result = LineUtils.merge_level_ways(unmergeds, cpu_count)
+        
+        # Highway mode
+        if mode == "highway":
+            logging.info("Merging way in same relation.")
+            # 2.1.2 Get relation data
+            relations = dict()
+            # ONLY search for those match the tags
+            for relation_id, relation_members in relation_member_dict.items():
+                hofn_datas = list(map(LineUtils.get_relation_data, relation_members, [lines_dict] * len(relation_members)))
+                hofn_datas = [i for i in hofn_datas if i is not None]
+                if hofn_datas: # If there is no data in the relation, it will be ignored.
+                    relations[relation_id] = hofn_datas
+            
+            relations =  {relation_id:geopandas.GeoDataFrame([vars(i) for i in relation_members]) for relation_id, relation_members in relations.items()} # Convert to GeoDataFrame for intersects use.
+            id_used_list = list()
+            relations_result = [LineUtils.get_merged_members(relation_members,levels,id_used_list) for relation_id,relation_members in relations.items()]
+            relations_result = sum(relations_result, []) # flatten the list from level 1 to 5
+            geopandas.GeoDataFrame(relations_result).to_file("relations_result.geojson", driver="GeoJSON")
+
+            # 2.2. concat relation result to lines from ways, and do one more time intersects merge.
+            logging.info("Merging remaining lines from ways.")
+            data_from_way = LimitAreaUtils.prepare_data(lines_df, limit_area.wkt)
+            data_from_way = data_from_way[~data_from_way["POLYGON_ID"].isin(id_used_list)]
+            data = pandas.concat([data_from_way, geopandas.GeoDataFrame(relations_result)], ignore_index=True)
+            unmerged_way_split_by_level = [data[data["ROAD_LEVEL"] == level] for level in levels]
+            result = [LineUtils.merge_by_intersects(i) for i in unmerged_way_split_by_level if not i.empty]
+            result = sum(result, []) # flatten list from level1 to level5
+            
+        # other mode
+        else:
+            data_from_way = LimitAreaUtils.prepare_data(lines_df, limit_area.wkt)
+            data = pandas.concat([data_from_way, geopandas.GeoDataFrame(relations_result)], ignore_index=True)
+            unmerged_way_split_by_level = [data[data["ROAD_LEVEL"] == level] for level in levels]
+            result = [LineUtils.merge_by_intersects(i) for i in unmerged_way_split_by_level if not i.empty]
+            result = sum(result, []) # flatten list from level1 to level5
+        
+        logging.info("Merge completed.")
         #############################################################################
         # After merging, we need some operations with difference mode
         # ONLY those linestring being ringed need to filter with area threshold
@@ -95,7 +135,7 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
             merged["geometry"] = merged.geometry.apply(lambda geometry: geometry.buffer(15 / 6371000 / math.pi * 180))
         merged.to_file(f"{output_path}/merged.geojson", driver="GeoJSON", index=False, encoding="utf-8")
 
-        logging.info(f"Merging completed, taking {time.time() - start_time} seconds")
+
     ###########################################################################################
     # [OPTIONAL] 3. re-merge and DIVIDE
     if DIVIDE:
@@ -106,7 +146,6 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
             merged = geopandas.read_file(f"{output_path}/merged.geojson")
         else:
             merged = geopandas.read_file(f"{output_path}/{mode}.tsv", sep="\t")
-        divide_result_dict = {'POLYGON_ID': [], 'POLYGON_NAME': [], 'HOFN_TYPE': [], 'ROAD_LEVEL': [], 'geometry': []}
         # Find all the line which length is larger than [user-set] km, DIVIDE it later.
         lengthy_geometry_ids = DIVIDE
         merged_result = []
@@ -142,3 +181,5 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
     logging.info("==================================")
     logging.info(f"Output file to: {output_path}/{mode}.geojson") if not DEBUGGING else logging.debug(f"Output file to: {output_path}/{mode}.tsv")
     sys.exit(0)
+
+# %%

@@ -1,6 +1,6 @@
 version: 1
 disable_existing_loggers: True
-file_path: \\logs\\
+file_path: /data/OSMOfflineParser/
 formatters:
     default:
             format: "%(asctime)s - [%(module)s] - [%(levelname)s] - %(message)s"

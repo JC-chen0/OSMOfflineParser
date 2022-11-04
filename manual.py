@@ -1,15 +1,11 @@
 # %%
-import encodings
-import math
 import geopandas
 import pandas
 import overpy
 import sys
 sys.setrecursionlimit(2000)
-from shapely import wkt, ops
 from shapely.geometry import Point, LineString, Polygon
-from src.util.merging_utils import LineUtils, brute_force_merge
-
+from src.utils import LineUtils, brute_force_merge
 # NT2_GEO_POLYGON = pandas.read_csv(f"{FILE_PATH}/NT2_GEO_POLYGON.tsv", sep="\t")
 # NT2_GEO_POLYGON.to_csv(f"{FILE_PATH}/NT2_GEO_POLYGON.csv", index=False)
 COUNTRY = "Mexico"
@@ -73,3 +69,5 @@ for i in reversed([0,1,2,3,4]):
 # %%
 geopandas.GeoDataFrame(result).to_file(f"{FILE_PATH}/coastline.geojson", driver="GeoJSON")
 geopandas.GeoDataFrame(result).to_csv(f"{FILE_PATH}/coastline.tsv", index=False, sep="\t")
+
+# %%

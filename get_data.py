@@ -8,12 +8,10 @@ import src.rings as rings
 import src.buildings as buildings
 from argparse import ArgumentParser
 
-from src.enum.hofn_type import HofnType
-from src.enum.mcc import National
-from src.enum.tag import Tag
+from src.enum import Tag, National,HofnType
 
-VERSION = 2
-DEBUG_VERSION = 1
+VERSION = 3
+DEBUG_VERSION = 0
 
 if __name__ == "__main__":
     ###############################################
@@ -37,20 +35,16 @@ if __name__ == "__main__":
     parser.add_argument("mcc", type=str, help="mcc", nargs="?")
     # parser.add_argument("nation", type=str, help="Nation name.")
     parser.add_argument("hofn_type", type=str, help="Process hofn type, Output file name", nargs="?")
-
     # OPTIONAL
     parser.add_argument("-v", "--version", help="Check current version", action="store_true")
     parser.add_argument("--limit_relation_id", type=str, help="If set, limit relation id will be changed from nation to id set.")
     parser.add_argument("--divide", type=str, help="format: id1, id2, id3 ..., if not set, all lines will not be divide.", nargs="+")
     parser.add_argument("--tags", type=str, help="format: tag_name1 search_value1 tag_name2 search_value2 ..., if not set, use default tags in config", nargs="+")
     args = parser.parse_args()
-
     if args.version:
-        print(f"{VERSION}.{DEBUG_VERSION}")
+        print(f'{VERSION}.{DEBUG_VERSION}')
         exit()
     
-    
-
     #######################################
     # Loading program arguments
     input_path = args.input
