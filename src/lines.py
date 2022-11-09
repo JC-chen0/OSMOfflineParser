@@ -1,5 +1,4 @@
-import functools
-import itertools
+
 import logging.config
 import logging
 import math
@@ -10,7 +9,6 @@ import os
 import geopandas
 import osmium
 import pandas
-import time
 from shapely import wkt
 from src.utils import LimitAreaUtils, LineUtils
 from src.enum import Tag, HofnType
@@ -107,7 +105,7 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
             relations_result = sum(relations_result, []) # flatten the list from level 1 to 5
             geopandas.GeoDataFrame(relations_result).to_file("relations_result.geojson", driver="GeoJSON")
 
-            # 2.2. concat relation result to lines from ways, and do one more time intersects merge.
+            # 2.2. concat relation result to lines from ways, and do one more time intersects merge.    
             logging.info("Merging remaining lines from ways.")
             data_from_way = LimitAreaUtils.prepare_data(lines_df, limit_area.wkt)
             data_from_way = data_from_way[~data_from_way["POLYGON_ID"].isin(id_used_list)]
@@ -119,7 +117,7 @@ def main(input_path, output_path, nation, limit_relation_id, mode, tags, DEBUGGI
         # other mode
         else:
             data_from_way = LimitAreaUtils.prepare_data(lines_df, limit_area.wkt)
-            data = pandas.concat([data_from_way, geopandas.GeoDataFrame(relations_result)], ignore_index=True)
+            data = data_from_way
             unmerged_way_split_by_level = [data[data["ROAD_LEVEL"] == level] for level in levels]
             result = [LineUtils.merge_by_intersects(i) for i in unmerged_way_split_by_level if not i.empty]
             result = sum(result, []) # flatten list from level1 to level5

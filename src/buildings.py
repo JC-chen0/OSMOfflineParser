@@ -5,13 +5,16 @@ from typing import Dict
 import geopandas
 import osmium
 import pandas
+import multiprocessing
+import numpy
 from shapely import wkt
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import polygonize
 from src.enum import Tag
-from src.utils import LimitAreaUtils, RingUtils
+from src.utils import LimitAreaUtils, RingUtils,MPUtils, BuildingUtils
+from itertools import repeat
 wktfab = osmium.geom.WKTFactory()
-
+cpu_count = int(numpy.where(multiprocessing.cpu_count() > 20, 20, multiprocessing.cpu_count() - 1))
 
 class BuildingHandler(osmium.SimpleHandler):
 
@@ -114,23 +117,27 @@ def main(input_path, output_path, nation, limit_relation_id, DEBUGGING=False, AL
         if way_building.geometry.within(limit_area):
             way_buildings_in_limit_area.append(Building(way_building.polygon_id, way_building.polygon_name, way_building.geometry, way_building.height, way_building.level))
     header = ["POLYGON_ID", "POLYGON_NAME", "geometry", "HEIGHT", "LEVEL"]
-    gdf = geopandas.GeoDataFrame([[building.polygon_id, building.polygon_name, building.geometry, building.height, building.level] for building in way_buildings_in_limit_area], columns=header)
-    gdf.to_file(f"{output_path}/way_buildings.geojson", driver="GeoJSON") if DEBUGGING else None
+    way_buildings_gdf = geopandas.GeoDataFrame([[building.polygon_id, building.polygon_name, building.geometry, building.height, building.level] for building in way_buildings_in_limit_area], columns=header)
+    way_buildings_gdf.to_file(f"{output_path}/way_buildings.geojson", driver="GeoJSON") if DEBUGGING else None
     # %%
     logging.info("[2/2] Extract inner from outer and get all the part and outline as polygons.")
     relation_member_dict = get_relation_member_data_building(relation_dict=relation_dict, way_dict=way_dict, tags=["outer", "inner", "", "outline", "part"])
     relation_member_data: geopandas.GeoDataFrame = geopandas.GeoDataFrame(relation_member_dict)
     relation_member_data = LimitAreaUtils.prepare_data(relation_member_data, limit_area.wkt)
     relation_member_dict = relation_member_data.to_dict("index")
-
+    
     # %%
     temp = dict()
     for member in relation_member_dict.values():
+        if not list(polygonize(member.get("geometry"))):
+            continue
         relation_id = member.get("relation_id")
 
         member.pop("relation_id")
-        geometry = Polygon(member.get("geometry"))
+        geometry = list(polygonize(member.get("geometry")))[0]
+        # geometry = list(polygonize(member.get("geometry")))[0] if list(polygonize(member.get("geometry"))) else geometry
         building = Building(relation_id=relation_id, polygon_id=member.get("way_id"), polygon_name=member.get("name"), geometry=geometry, role=member.get("role"), height=member.get("height"), level=member.get("level"))
+        # building = {"relation_id": relation_id, "polygon_id": member.get("way_id"), "polygon_name": member.get("name"), "geometry": geometry, "role": member.get("role"), "height": member.get("height"), "level": member.get("level")}
         if not temp.get(relation_id, 0):
             temp[relation_id] = {"outer": [], "inner": [], "other": []}
 
@@ -142,7 +149,21 @@ def main(input_path, output_path, nation, limit_relation_id, DEBUGGING=False, AL
             temp.get(relation_id).get("other").append(building)
     relation_member_dict = temp
 
-    logging.info("Group data completed, start to extract.")
+    logging.info("Group data completed, start to merge.")
+    # %%
+    # pool = multiprocessing.Pool(cpu_count)
+    # manager = multiprocessing.Manager()
+    # polygon_id_used_table = manager.list()
+
+    # # Avoid duplicate POLYGON_ID (WAY_ID)
+    # polygon_id_used_table += list(way_buildings_gdf["POLYGON_ID"].values)
+
+    # relation_member_sub_dicts = [item for item in MPUtils.chunks(relation_member_dict, int(len(relation_member_dict) / cpu_count))]
+    # pool.starmap(BuildingUtils.get_building_rings_merged_results, zip(relation_member_sub_dicts, repeat(polygon_id_used_table), repeat("building")))
+    # pool.close()
+
+    # relation_member_dict = {k:Building(polygon_id=v["POLYGON_ID"], polygon_name=v["POLYGON_NAME"], height=v["height"], level=v["height"], geometry=v["geometry"]) for x in relation_member_sub_dicts for k,v in x.items()}
+    # logging.info("Merge completed, start to extract.")
     # %%
     relation_result = geopandas.GeoDataFrame(columns=header)
     for relation_id, relation in relation_member_dict.items():
@@ -164,6 +185,6 @@ def main(input_path, output_path, nation, limit_relation_id, DEBUGGING=False, AL
     relation_result.to_file(f"{output_path}/relation_buildings.geojson", driver="GeoJSON") if DEBUGGING else None
 
     # %%
-    result = pandas.concat([gdf, relation_result])
+    result = pandas.concat([way_buildings_gdf, relation_result])
     result.to_file(f"{output_path}/buildings.geojson", driver="GeoJSON") if DEBUGGING else result.to_csv(f"{output_path}/buildings.tsv", sep="\t")
     logging.info("Program completed.")

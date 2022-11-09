@@ -60,8 +60,7 @@ def brute_force_merge(line1,line2,from_tail=True) -> LineString:
 
 class LineUtils:
 
-
-    def merge_by_intersects(unmerged_level_roads:geopandas.GeoDataFrame,id_used_list=[]):    
+    def merge_by_intersects(unmerged_level_roads:geopandas.GeoDataFrame,id_used_list=False):    
         unmerged_way = unmerged_level_roads.copy(deep=True) # copy to avoid changing original data, original data will used to check what id is used
         unmerged_way = unmerged_way.reset_index(drop=True) # reset index for loc issue, sindex intersects will check for labeled index. 
         result = [] # Generate geodataframe result
@@ -240,9 +239,9 @@ class RingUtils:
     def get_relation_member_data(relation_dict: Dict, way_dict: Dict, tags: list) -> list:
         result = []
         for relation_id, members in relation_dict.items():
-            valid_members = [member for member in members if member.role in tags and way_dict.get(member.ref, False)]
+            valid_members = [member for member in members if member.role in tags and way_dict.get(member.id, False)]
             for member in valid_members:          
-                way = way_dict[member.ref]
+                way = way_dict[member.id]
                 relation_member = {"relation_id": relation_id, "way_id": way.id, "name": way.name, "geometry": way.geometry, "role": member.role, type: member.type}
                 result.append(relation_member)
         return result
@@ -281,17 +280,18 @@ class RingUtils:
     def get_merged_rings(rings: list, polygon_id_used_table: list, mode) -> List[Dict]:
         def get_merged_line(ring, merging_candidates: list, current_merged_ids) -> LineString:
             # Avoid merge with self
-            current_merged_ids.append(ring["way_id"])
+            current_merged_ids.append(ring["polygon_id"])
 
             merging_line = ring.get("geometry")
+
             candidate_line = NotImplemented
             merging_index = 0
             while merging_index < len(merging_candidates):
                 candidate = merging_candidates[merging_index]
                 candidate_line = candidate.get("geometry")
-                candidate_id = candidate.get("way_id")
+                candidate_id = candidate.get("polygon_id")
                 try:
-                    if candidate.get('way_id') in current_merged_ids:
+                    if candidate.get('polygon_id') in current_merged_ids:
                         merging_index += 1
                     else:
                         if is_reverse_needed(merging_line, candidate_line):
@@ -299,7 +299,7 @@ class RingUtils:
                             logging.debug(f"candidate {candidate_id} reversed.")
                             candidate_line = reverse_linestring_coords(candidate_line)
                         if is_continuous(merging_line, candidate_line):
-                            logging.debug(f"{ring.get('way_id')} merge with {candidate_id}")
+                            logging.debug(f"{ring.get('polygon_id')} merge with {candidate_id}")
                             # merge and start new round of iteration.
                             merging_line = linemerge_by_wkt(merging_line, candidate_line)
                             current_merged_ids.append(candidate_id)
@@ -318,10 +318,10 @@ class RingUtils:
         current_merged_ids = []
         for ring in rings:
             # If being merged, skip it
-            if ring.get('way_id') in current_merged_ids:
+            if ring.get('polygon_id') in current_merged_ids:
                 continue
 
-            logging.debug(f"WAY:{ring.get('way_id')} start doing merge.")
+            logging.debug(f"WAY:{ring.get('polygon_id')} start doing merge.")
             merged_line = get_merged_line(ring, merging_candidate, current_merged_ids)
 
             # Choose way_id from merged line.
@@ -355,6 +355,7 @@ class RingUtils:
                 relation_member_dict[relation_id] = outers
                 for outer in outers:
                     relation_result.append(outer)
+            
 
             # Remove inner as islands.
             if mode == "water":
@@ -362,7 +363,6 @@ class RingUtils:
                 if inners:
                     inners = RingUtils.get_merged_rings(inners, polygon_id_used_table, "island")
                     RingUtils.islands_extracting(inners, islands)
-
 
 class MPUtils:
     # Dict divided to subdict
@@ -467,3 +467,93 @@ class LimitAreaUtils:
         intersects_indices = list(data_df.sindex.query_bulk(intersects_series, predicate="intersects")[1])
         data_df = data_df.iloc[intersects_indices]
         return data_df
+
+class BuildingUtils:
+
+    @staticmethod
+    def get_building_rings_merged_results(relation_member_dict, polygon_id_used_table,mode) -> tuple:
+        # Outer then inner
+        for relation_id, relation in relation_member_dict.items():
+            logging.debug(f"Relation: {relation_id} doing merge.")
+
+            outers = relation.get("outer")
+            if outers:
+                outers = RingUtils.get_merged_rings(outers, polygon_id_used_table,mode)
+                relation_member_dict[relation_id]["outer"] = outers
+
+            others = relation.get("other")
+            if others:
+                others = RingUtils.get_merged_rings(others, polygon_id_used_table,mode)
+                relation_member_dict[relation_id]["other"] = others
+
+            inners = relation.get("inner")
+            if inners:
+                inners = RingUtils.get_merged_rings(inners, polygon_id_used_table, mode)
+                relation_member_dict[relation_id]["inner"] = inners
+
+    # TODO: Optimize
+    @staticmethod
+    def get_merged_rings(rings: list, polygon_id_used_table: list, mode) -> List[Dict]:
+        def get_merged_line(ring, merging_candidates: list, current_merged_ids):
+            # Avoid merge with self
+            current_merged_ids.append(ring["way_id"])
+
+            merging = ring.get("geometry")
+            if merging.type == "Polygon":
+                return merging
+
+            candidate = NotImplemented
+            merging_index = 0
+            while merging_index < len(merging_candidates):
+                candidate = merging_candidates[merging_index]
+                candidate = candidate.get("geometry")
+
+                if candidate.type == "Polygon":
+                    merging_index += 1
+                    continue
+
+                candidate_id = candidate.get("way_id")
+                try:
+                    if candidate.get('way_id') in current_merged_ids:
+                        merging_index += 1
+                    else:
+                        if is_reverse_needed(merging, candidate):
+                            # Reverse the line and do merge with current index again.
+                            logging.debug(f"candidate {candidate_id} reversed.")
+                            candidate = reverse_linestring_coords(candidate)
+                        if is_continuous(merging, candidate):
+                            logging.debug(f"{ring.get('way_id')} merge with {candidate_id}")
+                            # merge and start new round of iteration.
+                            merging = linemerge_by_wkt(merging, candidate)
+                            current_merged_ids.append(candidate_id)
+                            merging_index = 0
+                        else:
+                            merging_index += 1
+                except:
+                    print(f"{candidate.get('way_id')} has some problems.")
+            logging.debug(f"Return {merging}")
+            return merging
+
+        #################################################################################
+        # Deep copy with merge candidate.
+        merging_candidate = [ring for ring in rings]
+        result = []
+        current_merged_ids = []
+        for ring in rings:
+            # If being merged, skip it
+            if ring.get('way_id') in current_merged_ids:
+                continue
+
+            logging.debug(f"WAY:{ring.get('way_id')} start doing merge.")
+            merged_line = get_merged_line(ring, merging_candidate, current_merged_ids)
+
+            # Choose way_id from merged line.
+            for merged_id in current_merged_ids:
+                if merged_id not in polygon_id_used_table:
+                    logging.debug(f"{merged_id} is choosed as polygon id.")
+                    # result.append(Building(polygon_id=merged_id, polygon_name=ring.get("name"),height=ring.get("height"), level=ring.get("level"), geometry=merged_line))
+                    result.append({'POLYGON_ID': merged_id, "POLYGON_NAME": ring.get("name"), "height": ring.get("height"), "level": ring.get("level"), "geometry": merged_line})
+                    polygon_id_used_table.append(merged_id)
+                    break
+
+        return result

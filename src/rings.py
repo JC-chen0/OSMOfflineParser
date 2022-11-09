@@ -4,10 +4,10 @@ import sys
 import time
 from itertools import repeat
 
-import numpy
-import osmium
 import logging
 import logging.config
+import numpy
+import osmium
 import geopandas
 import pandas
 import multiprocessing
@@ -45,7 +45,7 @@ class RingHandler(osmium.SimpleHandler):
                     if area.from_way():
                         # All area from way is one polygon (len(geometry) == 1)
                         ring_geometry = list(ring_geometry)[0]  # Extract polygon from multipolygon
-                        self.way_rings.append(HofnData(self.way_rings, ring_id, ring_name, ring_geometry))
+                        self.way_rings.append(HofnData(ring_id, ring_name, HofnType[self.mode].value, 0 ,ring_geometry))
         except:
             pass
 
